@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0c0a09;
+  --foreground: #fafaf9;
+  --muted: #78716c;
+  --accent: #c4b5fd;
+  --surface: #1c1917;
+  --border: #292524;
+  --wave: #4a4540;
+  --wave-bright: #b8b0a8;
+  /** Loop overlays — active is warmer/brighter violet, inactive is a cool slate so they read separately. */
+  --loop-active: rgba(210, 198, 255, 0.44);
+  --loop-active-border: rgba(233, 213, 255, 0.78);
+  --loop-inactive: rgba(100, 116, 139, 0.18);
+  --loop-inactive-border: rgba(148, 163, 184, 0.28);
+  /** Playback cursor — amber-400, calmer glow in ::part(cursor). */
+  --cursor: #fbbf24;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+
+/**
+ * WaveSurfer renders into a closed-ish shadow DOM but exposes `part` selectors.
+ * We pierce the shadow to add a soft cursor glow without forking the library.
+ */
+::part(cursor) {
+  background-color: var(--cursor) !important;
+  box-shadow:
+    0 0 4px rgba(251, 191, 36, 0.55),
+    0 0 12px rgba(251, 191, 36, 0.22);
+}
+
+/** Belt-and-suspenders: also hide any horizontal scrollbar inside the waveform host. */
+[data-testid="primary-waveform"] ::-webkit-scrollbar {
+  display: none;
+}
+[data-testid="primary-waveform"] {
+  scrollbar-width: none;
+}
