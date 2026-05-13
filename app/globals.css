@@ -9,11 +9,15 @@
   --border: #292524;
   --wave: #4a4540;
   --wave-bright: #b8b0a8;
-  /** Loop overlays — active is warmer/brighter violet, inactive is a cool slate so they read separately. */
-  --loop-active: rgba(210, 198, 255, 0.44);
-  --loop-active-border: rgba(233, 213, 255, 0.78);
-  --loop-inactive: rgba(100, 116, 139, 0.18);
-  --loop-inactive-border: rgba(148, 163, 184, 0.28);
+  /**
+   * Loop overlays — kept intentionally light so the waveform stays the hero.
+   * Active is a calm violet wash; inactive is a barely-there slate.
+   * Edge definition is carried by `.woodshed-region-active` shadows below.
+   */
+  --loop-active: rgba(210, 198, 255, 0.30);
+  --loop-active-border: rgba(233, 213, 255, 0.82);
+  --loop-inactive: rgba(100, 116, 139, 0.12);
+  --loop-inactive-border: rgba(148, 163, 184, 0.30);
 }
 
 @theme inline {
@@ -45,4 +49,113 @@ body {
 }
 [data-testid="primary-waveform"] {
   scrollbar-width: none;
+}
+
+/** Practice phrases list — hide native scrollbar, keep scroll (wheel / trackpad / keyboard). */
+.loop-sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.loop-sidebar-scroll:hover {
+  scrollbar-color: rgba(120, 113, 108, 0.45) transparent;
+}
+.loop-sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.loop-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.loop-sidebar-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+}
+.loop-sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 113, 108, 0.45);
+}
+.loop-sidebar-scroll:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(168, 162, 158, 0.55);
+}
+
+/**
+ * Loop region tiers (class names set in `woodshed-workspace.tsx`):
+ *
+ *   .woodshed-region-locked   — saved, not currently selected. Inherits the
+ *                               waveform's grab cursor so drags pan through it.
+ *   .woodshed-region-active   — saved practice phrase that's currently selected.
+ *                               Clearly framed, no drag handles, no glow.
+ *   .woodshed-region-editing  — draft loop or saved loop in Edit mode.
+ *                               Brighter edges, soft glow, drag/resize handles.
+ *
+ * The waveform stays the hero — emphasis is carried by edges, not heavy fills.
+ */
+[data-testid="primary-waveform"] .woodshed-region-locked {
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+  /** Locked regions never capture drag intent — the waveform's grab cursor passes through. */
+  cursor: inherit;
+}
+
+[data-testid="primary-waveform"] .woodshed-region-active {
+  position: relative;
+  border-radius: 2px;
+  /** Crisp framed selection without dominating the waveform underneath. */
+  box-shadow:
+    inset 2px 0 0 0 rgba(221, 214, 254, 0.55),
+    inset -2px 0 0 0 rgba(221, 214, 254, 0.55),
+    inset 0 1px 0 0 rgba(221, 214, 254, 0.18),
+    inset 0 -1px 0 0 rgba(221, 214, 254, 0.18),
+    0 0 0 1px rgba(196, 181, 253, 0.20);
+  transition: box-shadow 140ms ease;
+  cursor: inherit;
+}
+
+[data-testid="primary-waveform"] .woodshed-region-editing {
+  position: relative;
+  border-radius: 2px;
+  --woodshed-edge: rgba(237, 233, 254, 0.85);
+  --woodshed-edge-glow: rgba(196, 181, 253, 0.42);
+  box-shadow:
+    inset 3px 0 0 0 var(--woodshed-edge),
+    inset -3px 0 0 0 var(--woodshed-edge),
+    inset 0 1px 0 0 rgba(221, 214, 254, 0.20),
+    inset 0 -1px 0 0 rgba(221, 214, 254, 0.20),
+    0 0 0 1px rgba(196, 181, 253, 0.28),
+    0 0 18px rgba(139, 92, 246, 0.14);
+  transition:
+    box-shadow 140ms ease,
+    filter 140ms ease;
+}
+
+[data-testid="primary-waveform"] .woodshed-region-editing:hover {
+  --woodshed-edge: rgba(250, 245, 255, 1);
+  --woodshed-edge-glow: rgba(196, 181, 253, 0.58);
+  box-shadow:
+    inset 4px 0 0 0 var(--woodshed-edge),
+    inset -4px 0 0 0 var(--woodshed-edge),
+    inset 0 1px 0 0 rgba(221, 214, 254, 0.32),
+    inset 0 -1px 0 0 rgba(221, 214, 254, 0.32),
+    0 0 0 1px rgba(221, 214, 254, 0.42),
+    0 0 24px rgba(167, 139, 250, 0.26);
+  filter: brightness(1.03);
+}
+
+/** Resize handles are first/last children in WaveSurfer regions — only meaningful while editing. */
+[data-testid="primary-waveform"] .woodshed-region-editing > :first-child,
+[data-testid="primary-waveform"] .woodshed-region-editing > :last-child {
+  transition:
+    box-shadow 120ms ease,
+    filter 120ms ease;
+}
+
+[data-testid="primary-waveform"] .woodshed-region-editing > :first-child:hover,
+[data-testid="primary-waveform"] .woodshed-region-editing > :last-child:hover {
+  filter: brightness(1.20);
+  box-shadow: inset 0 0 14px rgba(196, 181, 253, 0.45);
+  cursor: ew-resize;
+}
+
+/** Pan-active cursor visual feedback (toggled by `installWaveformPanGesture`). */
+[data-testid="primary-waveform"] .is-panning,
+[data-testid="primary-waveform"] .is-panning * {
+  cursor: grabbing !important;
 }

@@ -31,6 +31,7 @@ import {
   type StoredProjectMeta,
 } from "@/lib/project-db";
 import { devError, devWarn } from "@/lib/dev-log";
+import { isSupabaseConfigured } from "@/lib/env/public";
 import {
   listCloudProjectSummaries,
   loadCloudProject,
@@ -52,6 +53,7 @@ import {
   resolveDemoAudioBlob,
   type PendingDemoHydration,
 } from "@/lib/demo-project";
+import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
 import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
 import {
@@ -155,11 +157,28 @@ function buildLoopRail(
 }
 
 const WoodshedWorkspace = memo(function WoodshedWorkspace() {
-  const { user, supabase } = useAuth();
+  const { user, supabase, refreshUser } = useAuth();
   const [cloudProjects, setCloudProjects] = useState<CloudProjectSummary[]>(
     [],
   );
-  const [cloudSaveBusy, setCloudSaveBusy] = useState(false);
+  const [cloudListError, setCloudListError] = useState<string | null>(null);
+  /** Supabase session user id — synced from `getSession` so cloud list/save match auth cookies. */
+  const [cloudSessionUserId, setCloudSessionUserId] = useState<string | null>(
+    null,
+  );
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [savePendingLabel, setSavePendingLabel] = useState<string | undefined>(
+    undefined,
+  );
+  const [saveStatusMessage, setSaveStatusMessage] = useState<string | null>(
+    null,
+  );
+  const [saveStatusTone, setSaveStatusTone] = useState<
+    "neutral" | "progress" | "success" | "error"
+  >("neutral");
+  const saveStatusClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -174,6 +193,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const suppressViewportScrollUntilRef = useRef(0);
   /** Stops tight loop RAF from the effect cleanup (see mount IIFE). */
   const cancelPlaybackLoopRef = useRef<(() => void) | null>(null);
+  /** Releases the click-drag pan gesture listeners from the effect cleanup. */
+  const releasePanRef = useRef<(() => void) | null>(null);
 
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<RegionsHandle | null>(null);
@@ -192,6 +213,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const projectId = useWoodshedStore((s) => s.projectId);
   const loops = useWoodshedStore((s) => s.loops);
   const activeLoopId = useWoodshedStore((s) => s.activeLoopId);
+  const editableLoopId = useWoodshedStore((s) => s.editableLoopId);
   const duration = useWoodshedStore((s) => s.duration);
   const minPxPerSec = useWoodshedStore((s) => s.minPxPerSec);
   const loopPlaybackEnabled = useWoodshedStore((s) => s.loopPlaybackEnabled);
@@ -212,7 +234,24 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     return `${m}:${s.toFixed(2).padStart(5, "0")}`;
   }, []);
 
-  /** Fit waveform to `loop` and update store zoom; returns false if layout not ready. */
+  /**
+   * Frame the active loop inside the waveform viewport with balanced padding.
+   *
+   * Loop occupies ~86% of the visible width, leaving ~7% breathing room on
+   * each side so the active phrase reads as *framed* rather than cropped.
+   *
+   * The crucial detail: WaveSurfer's wrapper sits behind a horizontal gutter
+   * (see `lib/waveform-gutter.ts`), so the wrapper's origin is at
+   * `x = WAVEFORM_HORIZONTAL_GUTTER_PX` inside the scroll container, not 0.
+   * The naive `loop.start * nextPxPerSec − padPx` formula ignores this and
+   * leaves the loop one gutter (~72 px) right of optical center — comfortable
+   * lead-in, cramped trail-out. The fix is to add the gutter to the desired
+   * scrollLeft so the loop *midpoint* lands at `clientWidth / 2`.
+   *
+   * Loops near the song's start or end clamp gracefully to `[0, maxScroll]`.
+   *
+   * Returns false if layout isn't ready (caller falls back to follow mode).
+   */
   const applyPhraseFitToLoop = useCallback((loop: PracticeLoop) => {
     const ws = wavesurferRef.current;
     if (!ws) return false;
@@ -223,13 +262,30 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (!container) return false;
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return false;
-    const targetWidth = clientWidth * 0.94;
+
+    /** Target loop width as a fraction of the viewport — controls how much breathing room. */
+    const LOOP_VIEWPORT_RATIO = 0.86;
+    const targetWidth = clientWidth * LOOP_VIEWPORT_RATIO;
     const nextPxPerSec = Math.max(4, Math.min(1500, targetWidth / span));
     useWoodshedStore.getState().setMinPxPerSec(nextPxPerSec);
     ws.zoom(nextPxPerSec);
-    const padPx = (clientWidth - span * nextPxPerSec) / 2;
-    const startPx = loop.start * nextPxPerSec - Math.max(0, padPx);
-    ws.setScroll(Math.max(0, startPx));
+
+    /** Center the loop midpoint in the visible viewport, accounting for the gutter. */
+    const loopMidPx = ((loop.start + loop.end) / 2) * nextPxPerSec;
+    const desiredScroll =
+      WAVEFORM_HORIZONTAL_GUTTER_PX + loopMidPx - clientWidth / 2;
+
+    /**
+     * Clamp to [0, maxScroll] using a derived bound. We can't trust
+     * `container.scrollWidth` immediately after `ws.zoom()` because layout
+     * hasn't flushed yet; derive instead from duration × pxPerSec + both gutters.
+     */
+    const duration = ws.getDuration();
+    const totalScrollWidth =
+      duration * nextPxPerSec + 2 * WAVEFORM_HORIZONTAL_GUTTER_PX;
+    const maxScroll = Math.max(0, totalScrollWidth - clientWidth);
+    const clampedScroll = Math.max(0, Math.min(maxScroll, desiredScroll));
+    ws.setScroll(clampedScroll);
     return true;
   }, []);
 
@@ -271,25 +327,58 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     listProjects().then(setProjectsList).catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    if (!supabase) {
+      setCloudSessionUserId(null);
+      return;
+    }
+    const syncSession = () => {
+      void supabase.auth.getSession().then(({ data: { session } }) => {
+        setCloudSessionUserId(session?.user?.id ?? null);
+      });
+    };
+    syncSession();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudSessionUserId(session?.user?.id ?? null);
+    });
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
   const refreshCloudProjects = useCallback(async () => {
-    if (!user?.id || !supabase) {
+    if (!supabase) {
       setCloudProjects([]);
+      setCloudListError(null);
+      return;
+    }
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const uid = session?.user?.id;
+    if (!uid) {
+      setCloudProjects([]);
+      setCloudListError(null);
       return;
     }
     try {
       const list = await listCloudProjectSummaries(supabase);
       setCloudProjects(list);
+      setCloudListError(null);
     } catch (e) {
-      devWarn(
-        e instanceof Error ? e.message : "Could not refresh cloud projects.",
-      );
+      const msg =
+        e instanceof Error ? e.message : "Could not refresh cloud projects.";
+      console.error("[Woodshed cloud] listCloudProjectSummaries failed:", e);
       setCloudProjects([]);
+      setCloudListError(msg);
     }
-  }, [user?.id, supabase]);
+  }, [supabase]);
 
   useEffect(() => {
     void refreshCloudProjects();
-  }, [refreshCloudProjects]);
+  }, [refreshCloudProjects, cloudSessionUserId]);
 
   useEffect(() => {
     void fetch(DEMO_PROJECT_JSON_PATH, { cache: "no-store" })
@@ -372,8 +461,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         height: "auto",
         cursorColor: "transparent",
         cursorWidth: 0,
-        waveColor: "#342f2c",
-        progressColor: "#d8c8fc",
+        /** Slightly brighter wave so peaks remain legible underneath the loop overlay (the waveform is the hero). */
+        waveColor: "#403a35",
+        progressColor: "#e0d2ff",
         barWidth: 1,
         barGap: 0,
         normalize: true,
@@ -382,7 +472,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         /** Critical: default `fillParent:true` hides zoom until duration×px/sec exceeds viewport */
         fillParent: false,
         minPxPerSec: starterZoom,
-        dragToSeek: true,
+        /**
+         * Drag is reserved for click-drag panning of the waveform viewport (see pan handler below).
+         * Click still seeks via WaveSurfer's internal interaction; this only disables drag-to-seek
+         * so panning and editing gestures don't fight the playhead.
+         */
+        dragToSeek: false,
         autoScroll: initialAutoScroll,
         autoCenter: initialAutoScroll,
       });
@@ -403,6 +498,38 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
       regionsRef.current = regions;
       wavesurferRef.current = ws;
+
+      const applyWaveformGutterMargins = () => {
+        const dom = peekWaveSurferDom(ws);
+        if (!dom?.wrapper) return;
+        dom.wrapper.style.marginLeft = `${WAVEFORM_HORIZONTAL_GUTTER_PX}px`;
+        dom.wrapper.style.marginRight = `${WAVEFORM_HORIZONTAL_GUTTER_PX}px`;
+      };
+      applyWaveformGutterMargins();
+
+      /**
+       * Click-drag pan on the main waveform.
+       *
+       * Why this exists:
+       *   The mini-map was carrying too much weight for everyday navigation.
+       *   Direct click-drag inside the waveform is the most tactile way to move
+       *   around while practicing.
+       *
+       * Gesture priority (see Part 7 of the spec):
+       *   1. Editable region → regions plugin handles drag/resize (we bail out).
+       *   2. Locked/selected region or empty waveform → pan when the pointer
+       *      moves past the slop threshold; click without drag still seeks.
+       *
+       * Click-vs-pan disambiguation:
+       *   We require ~4px of movement before activating pan so single clicks
+       *   still seek via WaveSurfer's internal interaction. Once a pan starts
+       *   we set pointer capture and intercept the trailing `click` event in
+       *   the capture phase so WaveSurfer's seek doesn't fire on release.
+       */
+      const panDom = peekWaveSurferDom(ws);
+      if (panDom) {
+        releasePanRef.current = installWaveformPanGesture(panDom.scrollContainer);
+      }
 
       let tightLoopRaf = 0;
       const cancelTightLoop = () => {
@@ -553,6 +680,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         } catch {
           /* optional */
         }
+
+        applyWaveformGutterMargins();
+        updateViewport();
       });
 
       const tryLoadBuiltInDemo = async () => {
@@ -583,6 +713,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       loopsSignature.current = "";
       wheelBound.current = false;
       regionsRef.current = null;
+      /** Release the pan handler before destroying WaveSurfer (DOM listeners attach to the scrollContainer). */
+      releasePanRef.current?.();
+      releasePanRef.current = null;
       wavesurferRef.current?.destroy();
       wavesurferRef.current = null;
     };
@@ -638,45 +771,71 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const regions = regionsRef.current;
     if (!ws || !regions) return;
 
-    const signature = `${activeLoopId ?? "none"}|${loops
-      .map((l) => `${l.id}:${l.start.toFixed(4)}:${l.end.toFixed(4)}`)
-      .join("|")}`;
+    /**
+     * Main waveform shows ONLY the currently active loop.
+     *
+     * Why: the waveform is the practice surface, not a map. Multiple overlapping
+     * loop overlays compete with the music for attention. The mini-map continues
+     * to render every saved loop so users still see the full song structure;
+     * the main view stays focused on the phrase being practiced or edited.
+     *
+     * State is untouched — inactive loops still live in `loops`, in the sidebar,
+     * and in the mini-map. Selecting a different loop swaps which one is drawn here.
+     */
+    const renderedLoop = activeLoopId
+      ? loops.find((l) => l.id === activeLoopId) ?? null
+      : null;
+
+    /**
+     * Signature only tracks what the main waveform actually draws.
+     * If an inactive loop's bounds change (e.g. background tempo change),
+     * we don't waste a region rebuild. Editable-state is included so flipping
+     * in/out of Edit mode rebuilds with the right drag/resize flags.
+     */
+    const signature = renderedLoop
+      ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|${
+          renderedLoop.id === editableLoopId ? "edit" : "lock"
+        }`
+      : "empty";
     if (signature === loopsSignature.current) {
       return;
     }
     loopsSignature.current = signature;
 
     regions.clearRegions();
-    loops.forEach((loop) => {
-      const editable = loop.id === activeLoopId;
+    const renderable = renderedLoop ? [renderedLoop] : [];
+    renderable.forEach((loop) => {
+      const isEditing = loop.id === editableLoopId;
+      const isActive = loop.id === activeLoopId;
       const region = regions.addRegion({
         id: loop.id,
         start: loop.start,
         end: loop.end,
-        /** Keep these in sync with --loop-active / --loop-inactive in globals.css. */
-        color: editable
-          ? "rgba(210, 198, 255, 0.46)"
-          : "rgba(100,116,139,0.16)",
-        drag: editable,
-        resize: editable,
+        /**
+         * Three visual tiers, in order of emphasis:
+         *   editing  — calm violet wash, bright edges + handles (CSS owns the edge frame)
+         *   active   — selected practice phrase: clear borders, no fill emphasis
+         *   locked   — barely-there slate: still selectable, never editable
+         * Fill opacities stay low so the waveform is always the hero.
+         */
+        color: isEditing
+          ? "rgba(210, 198, 255, 0.30)"
+          : isActive
+            ? "rgba(196, 181, 253, 0.10)"
+            : "rgba(100,116,139,0.10)",
+        drag: isEditing,
+        resize: isEditing,
       }) as RegionHandle & { element?: HTMLElement | null };
 
       requestAnimationFrame(() => {
         const el = region.element;
-        if (!el || !editable) return;
-        el.style.transition =
-          "box-shadow 120ms ease, filter 120ms ease, outline-color 120ms ease";
-        const onEnter = () => {
-          el.style.boxShadow =
-            "inset 0 0 0 1.5px rgba(233, 213, 255, 0.65), 0 0 14px rgba(167, 139, 250, 0.12)";
-          el.style.filter = "brightness(1.03)";
-        };
-        const onLeave = () => {
-          el.style.boxShadow = "";
-          el.style.filter = "";
-        };
-        el.addEventListener("pointerenter", onEnter);
-        el.addEventListener("pointerleave", onLeave);
+        if (!el) return;
+        const className = isEditing
+          ? "woodshed-region-editing"
+          : isActive
+            ? "woodshed-region-active"
+            : "woodshed-region-locked";
+        el.classList.add(className);
       });
 
       region.on("click", () => {
@@ -740,7 +899,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         useWoodshedStore.getState().setHoverTime(null),
       );
     }
-  }, [loops, activeLoopId]);
+  }, [loops, activeLoopId, editableLoopId]);
 
   const ingestFile = useCallback(async (blob: Blob) => {
     const ws = wavesurferRef.current;
@@ -797,9 +956,36 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     [primeWaveformCaches],
   );
 
+  const scheduleSaveStatusClear = useCallback(
+    (ms: number) => {
+      if (saveStatusClearTimerRef.current) {
+        clearTimeout(saveStatusClearTimerRef.current);
+      }
+      saveStatusClearTimerRef.current = setTimeout(() => {
+        saveStatusClearTimerRef.current = null;
+        setSaveStatusMessage(null);
+        setSaveStatusTone("neutral");
+      }, ms);
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      if (saveStatusClearTimerRef.current) {
+        clearTimeout(saveStatusClearTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const persistSession = useCallback(async () => {
     const snapshot = useWoodshedStore.getState();
-    if (snapshot.projectId === DEMO_PROJECT_ID) {
+    const isDemo = snapshot.projectId === DEMO_PROJECT_ID;
+
+    const clearPendingLabel = () => setSavePendingLabel(undefined);
+
+    if (isDemo) {
       devWarn(
         "The built-in example project is read-only. Open a saved session or upload audio, then use Save to store your own copy.",
       );
@@ -810,15 +996,74 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       return;
     }
 
-    if (user?.id && supabase) {
-      setCloudSaveBusy(true);
+    const configured = isSupabaseConfigured();
+    let sessionUserId: string | null = null;
+    let sessionReadError: string | null = null;
+
+    if (supabase) {
+      const first = await supabase.auth.getSession();
+      if (first.error) {
+        sessionReadError = first.error.message;
+      }
+      sessionUserId = first.data.session?.user?.id ?? null;
+      if (!sessionUserId && user?.id) {
+        await refreshUser();
+        const second = await supabase.auth.getSession();
+        if (second.error) {
+          sessionReadError = second.error.message;
+        }
+        sessionUserId = second.data.session?.user?.id ?? null;
+      }
+    }
+
+    const existingCloudId = isCloudProjectId(snapshot.projectId)
+      ? snapshot.projectId
+      : null;
+
+    const useCloud =
+      Boolean(
+        configured &&
+          supabase &&
+          sessionUserId &&
+          !isDemo,
+      );
+
+    console.log("[Woodshed save]", {
+      supabaseConfigured: configured,
+      hasSupabaseClient: Boolean(supabase),
+      sessionPresent: Boolean(sessionUserId),
+      sessionReadError,
+      sessionUserId,
+      reactContextUserId: user?.id ?? null,
+      isDemoProject: isDemo,
+      projectId: snapshot.projectId,
+      existingCloudProjectId: existingCloudId,
+      savePath: useCloud ? "cloud" : "local",
+    });
+
+    if (configured && supabase && user?.id && !sessionUserId) {
+      const msg =
+        sessionReadError != null
+          ? `Signed in, but no Supabase session could be read (${sessionReadError}). Try refreshing the page.`
+          : "Signed in, but no Supabase session was found. Try refreshing the page before saving to the cloud.";
+      setSaveStatusMessage(msg);
+      setSaveStatusTone("error");
+      scheduleSaveStatusClear(12_000);
+      console.error("[Woodshed save] blocked: UI user without session", {
+        reactContextUserId: user.id,
+      });
+      return;
+    }
+
+    if (useCloud && supabase && sessionUserId) {
+      setSaveBusy(true);
+      setSavePendingLabel("Saving to cloud…");
+      setSaveStatusMessage("Saving to cloud…");
+      setSaveStatusTone("progress");
       try {
-        const existingCloudId = isCloudProjectId(snapshot.projectId)
-          ? snapshot.projectId
-          : null;
         const cloudId = await upsertCloudProject(
           supabase,
-          user.id,
+          sessionUserId,
           existingCloudId,
           {
             name: snapshot.projectName,
@@ -827,32 +1072,63 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             audioBlob: audioBlobRef.current,
           },
         );
+        console.log("[Woodshed save] cloud upsert ok", { cloudProjectId: cloudId });
         useWoodshedStore
           .getState()
           .setProjectMeta(cloudId, snapshot.projectName);
         await refreshCloudProjects();
+        setSaveStatusMessage("Saved to cloud");
+        setSaveStatusTone("success");
+        scheduleSaveStatusClear(5000);
       } catch (e) {
-        devWarn(
-          e instanceof Error ? e.message : "Cloud save failed. Try again.",
-        );
+        const detail = e instanceof Error ? e.message : String(e);
+        console.error("[Woodshed save] cloud upsert failed:", e);
+        setSaveStatusMessage(`Cloud save failed: ${detail}`);
+        setSaveStatusTone("error");
+        scheduleSaveStatusClear(14_000);
       } finally {
-        setCloudSaveBusy(false);
+        setSaveBusy(false);
+        clearPendingLabel();
       }
       return;
     }
 
-    const pid = snapshot.projectId ?? nanoid();
-    await saveBlobRecord(pid, audioBlobRef.current, "audio");
-    await saveDexieProject({
-      id: pid,
-      name: snapshot.projectName,
-      loops: snapshot.loops,
-      activeLoopId: snapshot.activeLoopId,
-      blobId: pid,
-    });
-    useWoodshedStore.getState().setProjectMeta(pid, snapshot.projectName);
-    await listProjects().then(setProjectsList);
-  }, [user?.id, supabase, refreshCloudProjects]);
+    setSaveBusy(true);
+    setSavePendingLabel("Saving locally…");
+    setSaveStatusMessage("Saving locally…");
+    setSaveStatusTone("progress");
+    try {
+      const pid = snapshot.projectId ?? nanoid();
+      await saveBlobRecord(pid, audioBlobRef.current, "audio");
+      await saveDexieProject({
+        id: pid,
+        name: snapshot.projectName,
+        loops: snapshot.loops,
+        activeLoopId: snapshot.activeLoopId,
+        blobId: pid,
+      });
+      useWoodshedStore.getState().setProjectMeta(pid, snapshot.projectName);
+      await listProjects().then(setProjectsList);
+      setSaveStatusMessage("Saved locally");
+      setSaveStatusTone("success");
+      scheduleSaveStatusClear(5000);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error("[Woodshed save] local save failed:", e);
+      setSaveStatusMessage(`Local save failed: ${detail}`);
+      setSaveStatusTone("error");
+      scheduleSaveStatusClear(14_000);
+    } finally {
+      setSaveBusy(false);
+      clearPendingLabel();
+    }
+  }, [
+    user?.id,
+    supabase,
+    refreshCloudProjects,
+    refreshUser,
+    scheduleSaveStatusClear,
+  ]);
 
   const handleKeyboard = useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
@@ -977,12 +1253,22 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         demoProjectLabel={demoPickerTitle}
         userProjects={userProjectsSelectable}
         cloudProjects={cloudProjects}
-        showCloudSessions={Boolean(user?.id && supabase)}
+        showCloudSessions={Boolean(
+          isSupabaseConfigured() && supabase && cloudSessionUserId,
+        )}
         isDemoProject={isDemoProject}
         sessionNameReadOnly={isDemoProject}
         saveDisabled={isDemoProject}
-        saveLabel={user?.id && supabase ? "Save to cloud" : "Save"}
-        saveBusy={cloudSaveBusy}
+        saveLabel={
+          isSupabaseConfigured() && supabase && cloudSessionUserId
+            ? "Save to cloud"
+            : "Save"
+        }
+        saveBusy={saveBusy}
+        savePendingLabel={savePendingLabel}
+        saveStatusMessage={saveStatusMessage}
+        saveStatusTone={saveStatusTone}
+        cloudListError={cloudListError}
         devExportLoopsJson={
           process.env.NODE_ENV === "development"
             ? handleDevExportLoopsJson
@@ -1039,11 +1325,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               );
               await refreshCloudProjects();
             } catch (e) {
-              devWarn(
+              const msg =
                 e instanceof Error
                   ? e.message
-                  : "Could not open this cloud project.",
-              );
+                  : "Could not open this cloud project.";
+              console.error("[Woodshed cloud] loadCloudProject failed:", e);
+              setSaveStatusMessage(`Cloud open failed: ${msg}`);
+              setSaveStatusTone("error");
+              scheduleSaveStatusClear(12_000);
             }
             return;
           }
@@ -1069,12 +1358,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               if (!ws) return;
               if (ws.isPlaying()) ws.pause();
               else void ws.play();
-            }}
-            onStop={() => {
-              wavesurferRef.current?.pause();
-              wavesurferRef.current?.setTime(0);
-              useWoodshedStore.getState().setPlaying(false);
-              useWoodshedStore.getState().setCurrentTime(0);
             }}
             onRestartLoop={() => {
               const ws = wavesurferRef.current;
@@ -1136,12 +1419,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         <LoopSidebar
           loops={loops}
           activeLoopId={activeLoopId}
+          editableLoopId={editableLoopId}
           onSelectLoop={(id) => useWoodshedStore.getState().selectLoop(id)}
           onRenameLoop={(id, next) =>
             useWoodshedStore.getState().renameLoop(id, next)
           }
           onAddLoop={() => useWoodshedStore.getState().addLoopCandidate()}
           onRemoveLoop={(id) => useWoodshedStore.getState().removeLoop(id)}
+          onSetEditable={(id) =>
+            useWoodshedStore.getState().setEditableLoopId(id)
+          }
         />
       </div>
     </section>
@@ -1160,4 +1447,112 @@ function loopBracketStep(shift: boolean, alt: boolean) {
   if (shift) return 0.012;
   if (alt) return 0.035;
   return 0.08;
+}
+
+/**
+ * Px the pointer must travel before a hold-and-drag converts to a pan.
+ * Small enough to feel instant, large enough that single-click seeks survive.
+ */
+const PAN_THRESHOLD_PX = 4;
+
+/**
+ * Install the click-drag pan gesture on the waveform scroll container.
+ *
+ * Returns a cleanup function that detaches all listeners.
+ *
+ * Implementation notes:
+ *   - We don't `preventDefault` on pointerdown so WaveSurfer's click-to-seek
+ *     still works for real (non-dragging) clicks.
+ *   - Once we cross the slop threshold, we capture the pointer and intercept
+ *     the subsequent `click` event in the capture phase. Without that,
+ *     WaveSurfer's interaction layer would seek to wherever the pointer
+ *     released, which would feel terrible after a pan.
+ *   - Editable regions are skipped — the regions plugin owns those gestures.
+ *     Locked / selected regions fall through, so dragging across them pans.
+ */
+function installWaveformPanGesture(container: HTMLElement): () => void {
+  container.style.cursor = "grab";
+
+  let startX = 0;
+  let startScrollLeft = 0;
+  let activePointerId: number | null = null;
+  let armed = false;
+  let panning = false;
+  let suppressNextClick = false;
+
+  const reset = () => {
+    armed = false;
+    panning = false;
+    activePointerId = null;
+    container.style.cursor = "grab";
+    container.classList.remove("is-panning");
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const target = event.target as Element | null;
+    /** Editable region drag/resize is owned by the WaveSurfer regions plugin. */
+    if (target?.closest(".woodshed-region-editing")) return;
+
+    startX = event.clientX;
+    startScrollLeft = container.scrollLeft;
+    activePointerId = event.pointerId;
+    armed = true;
+    panning = false;
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!armed || event.pointerId !== activePointerId) return;
+    const dx = event.clientX - startX;
+    if (!panning) {
+      if (Math.abs(dx) < PAN_THRESHOLD_PX) return;
+      panning = true;
+      try {
+        container.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
+      container.style.cursor = "grabbing";
+      container.classList.add("is-panning");
+    }
+    container.scrollLeft = startScrollLeft - dx;
+    event.preventDefault();
+  };
+
+  const onPointerEnd = (event: PointerEvent) => {
+    if (event.pointerId !== activePointerId) return;
+    if (panning) {
+      try {
+        container.releasePointerCapture(event.pointerId);
+      } catch {
+        /* release is best-effort */
+      }
+      /** Stop WaveSurfer's click-to-seek that would otherwise fire on release. */
+      suppressNextClick = true;
+    }
+    reset();
+  };
+
+  const onClickCapture = (event: MouseEvent) => {
+    if (!suppressNextClick) return;
+    suppressNextClick = false;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+  };
+
+  container.addEventListener("pointerdown", onPointerDown);
+  container.addEventListener("pointermove", onPointerMove, { passive: false });
+  container.addEventListener("pointerup", onPointerEnd);
+  container.addEventListener("pointercancel", onPointerEnd);
+  container.addEventListener("click", onClickCapture, true);
+
+  return () => {
+    container.removeEventListener("pointerdown", onPointerDown);
+    container.removeEventListener("pointermove", onPointerMove);
+    container.removeEventListener("pointerup", onPointerEnd);
+    container.removeEventListener("pointercancel", onPointerEnd);
+    container.removeEventListener("click", onClickCapture, true);
+    container.style.cursor = "";
+    container.classList.remove("is-panning");
+  };
 }

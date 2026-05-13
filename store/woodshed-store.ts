@@ -17,6 +17,15 @@ export type WoodshedState = {
   duration: number;
   loops: PracticeLoop[];
   activeLoopId: string | null;
+  /**
+   * The single loop currently in editable/draft mode.
+   * - Newly created loops auto-enter this state ("draft" — until the user clicks Done).
+   * - Saved loops are locked by default. The user must explicitly enter Edit mode.
+   * - Only one loop is ever editable at a time.
+   * - Selecting a different loop auto-finalizes the previous editable one.
+   * Separation of concerns: `activeLoopId` = practice focus; `editableLoopId` = edit focus.
+   */
+  editableLoopId: string | null;
   isPlaying: boolean;
   currentTime: number;
   /** When true, playback repeats the selected loop; waveform auto-follow is off. */
@@ -60,6 +69,12 @@ type WoodshedActions = {
   renameLoop: (id: string, name: string) => void;
   updateLoopBounds: (id: string, start: number, end: number) => void;
   removeLoop: (id: string) => void;
+  /**
+   * Set / clear the single loop currently in edit mode.
+   * Pass null to finalize (lock) the currently editable loop.
+   * Used by the sidebar "Edit" / "Done" buttons and internally on new-loop creation.
+   */
+  setEditableLoopId: (id: string | null) => void;
   nudgeLoopEdge: (edge: "start" | "end", deltaSec: number) => void;
   bumpTempo: (delta: number) => void;
   /** Sets active loop tempo from UI percent slider (25–150). No-op without active loop. */
@@ -78,6 +93,7 @@ const initialState: WoodshedState = {
   duration: 0,
   loops: [],
   activeLoopId: null,
+  editableLoopId: null,
   isPlaying: false,
   currentTime: 0,
   loopPlaybackEnabled: false,
@@ -101,6 +117,8 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       duration,
       loops: [loop],
       activeLoopId: loop.id,
+      /** Bootstrap loops are brand-new — start in draft so the user can refine immediately. */
+      editableLoopId: loop.id,
       loopPlaybackEnabled: true,
       loopFocusTick: state.loopFocusTick + 1,
     }));
@@ -118,7 +136,11 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set({ minPxPerSec: Math.max(4, Math.min(1500, minPxPerSec)) }),
   setHoverTime: (hoverTime) => set({ hoverTime }),
   setViewportMode: (viewportMode) => set({ viewportMode }),
-  upsertLoops: (loops) => set({ loops }),
+  /**
+   * Bulk-load (project hydration). Loaded loops are always treated as "saved" —
+   * any in-flight edit/draft state is cleared so the user enters practice mode.
+   */
+  upsertLoops: (loops) => set({ loops, editableLoopId: null }),
   addLoopCandidate: () => {
     const { duration, loops, activeLoopId } = get();
     if (!duration) return;
@@ -134,6 +156,8 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set((state) => ({
       loops: [...loops, created],
       activeLoopId: created.id,
+      /** Brand-new loop → enter draft so the user can shape it immediately. */
+      editableLoopId: created.id,
       loopPlaybackEnabled: true,
       loopFocusTick: state.loopFocusTick + 1,
     }));
@@ -156,6 +180,8 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set((s) => ({
       loops: [...s.loops, phrase],
       activeLoopId: phrase.id,
+      /** Brand-new loop → enter draft so the user can shape it immediately. */
+      editableLoopId: phrase.id,
       loopPlaybackEnabled: true,
       loopFocusTick: s.loopFocusTick + 1,
     }));
@@ -163,9 +189,19 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
   },
   selectLoop: (activeLoopId) =>
     set((s) => {
+      /**
+       * Selection auto-finalizes any other loop in edit mode — practice is separate from editing.
+       * Re-selecting the currently editable loop preserves edit mode (lets the user click between
+       * the draft and the sidebar without losing their work).
+       */
+      const nextEditable =
+        activeLoopId !== null && activeLoopId === s.editableLoopId
+          ? s.editableLoopId
+          : null;
       if (activeLoopId === null) {
         return {
           activeLoopId: null,
+          editableLoopId: nextEditable,
           loopPlaybackEnabled: false,
           viewportMode: "follow",
           loopFocusTick: s.loopFocusTick + 1,
@@ -175,6 +211,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       const playback = Boolean(loop && loop.end > loop.start);
       return {
         activeLoopId,
+        editableLoopId: nextEditable,
         loopPlaybackEnabled: playback,
         loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
         ...(!playback ? { viewportMode: "follow" as const } : {}),
@@ -202,17 +239,21 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set((s) => {
       const next = s.loops.filter((l) => l.id !== id);
       const activeRemoved = s.activeLoopId === id;
+      /** If the editable loop got removed, exit edit mode. */
+      const editableRemoved = s.editableLoopId === id;
       const nextActive = activeRemoved ? next[0]?.id ?? null : s.activeLoopId;
+      const nextEditable = editableRemoved ? null : s.editableLoopId;
       if (next.length === 0) {
         return {
           loops: next,
           activeLoopId: null,
+          editableLoopId: null,
           loopPlaybackEnabled: false,
           viewportMode: "follow",
         };
       }
       if (!activeRemoved) {
-        return { loops: next, activeLoopId: nextActive };
+        return { loops: next, activeLoopId: nextActive, editableLoopId: nextEditable };
       }
       const naLoop = nextActive
         ? next.find((l) => l.id === nextActive)
@@ -221,10 +262,17 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       return {
         loops: next,
         activeLoopId: nextActive,
+        editableLoopId: nextEditable,
         loopPlaybackEnabled: playback,
         loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
         ...(!playback ? { viewportMode: "follow" as const } : {}),
       };
+    }),
+  setEditableLoopId: (id) =>
+    set((s) => {
+      if (id === null) return { editableLoopId: null };
+      const exists = s.loops.some((l) => l.id === id);
+      return exists ? { editableLoopId: id } : {};
     }),
   nudgeLoopEdge: (edge, deltaSec) => {
     const { activeLoopId, loops, duration } = get();

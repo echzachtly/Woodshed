@@ -28,19 +28,19 @@ export function HeaderAccount() {
 
   if (user?.email) {
     return (
-      <div className="flex max-w-[min(100%,14rem)] shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+      <div className="flex max-w-[min(100%,16rem)] shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
         <span
-          className="truncate text-right text-[11px] text-stone-400 sm:max-w-[10rem] sm:text-xs"
+          className="truncate text-right text-[11px] text-stone-500 sm:max-w-[11rem] sm:text-[12px]"
           title={user.email}
         >
           {user.email}
         </span>
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           className={cn(
-            "h-8 shrink-0 border-stone-700/80 px-2.5 text-xs text-stone-200",
-            "hover:bg-stone-800/80",
+            "h-8 shrink-0 px-2.5 text-xs text-stone-400",
+            "hover:bg-stone-800/60 hover:text-stone-200",
           )}
           disabled={signingOut}
           onClick={() => {
@@ -54,7 +54,7 @@ export function HeaderAccount() {
               });
           }}
         >
-          {signingOut ? "…" : "Log out"}
+          {signingOut ? "…" : "Sign out"}
         </Button>
       </div>
     );
@@ -63,10 +63,10 @@ export function HeaderAccount() {
   return (
     <Button
       asChild
-      variant="secondary"
-      className="h-8 shrink-0 border-stone-700/80 px-3 text-xs"
+      variant="ghost"
+      className="h-8 shrink-0 px-3 text-xs text-stone-400 hover:bg-stone-800/60 hover:text-stone-200"
     >
-      <Link href="/login">Log in</Link>
+      <Link href="/login">Sign in</Link>
     </Button>
   );
 }

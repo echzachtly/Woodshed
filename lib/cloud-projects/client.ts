@@ -4,6 +4,7 @@ import {
   WOODSHED_AUDIO_BUCKET,
   audioStoragePath,
 } from "@/lib/cloud-projects/constants";
+import { formatSupabaseClientError } from "@/lib/cloud-projects/errors";
 import type { PracticeLoop } from "@/lib/loop-engine";
 
 export type CloudProjectSummary = {
@@ -50,7 +51,7 @@ export async function listCloudProjectSummaries(
     .select("id,name,updated_at")
     .order("updated_at", { ascending: false });
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(formatSupabaseClientError(error));
   const rows = (data ?? []) as Pick<ProjectRow, "id" | "name" | "updated_at">[];
   return rows.map((r) => ({
     id: r.id,
@@ -80,18 +81,36 @@ export async function upsertCloudProject(
   const projectId = existingCloudProjectId ?? crypto.randomUUID();
   const storagePath = audioStoragePath(userId, projectId);
 
+  /** Upload first so we never insert a DB row without storage (or with missing audio). */
+  const { error: uploadError } = await supabase.storage
+    .from(WOODSHED_AUDIO_BUCKET)
+    .upload(storagePath, payload.audioBlob, {
+      upsert: true,
+      contentType: mime,
+    });
+  if (uploadError) {
+    throw new Error(
+      `Storage upload (${WOODSHED_AUDIO_BUCKET} / ${storagePath}): ${formatSupabaseClientError(uploadError)}`,
+    );
+  }
+
   if (existingCloudProjectId) {
     const { error } = await supabase
       .from("woodshed_projects")
       .update({
         name: payload.name,
         audio_mime: mime,
+        audio_storage_path: storagePath,
         active_loop_id: payload.activeLoopId,
         updated_at: new Date().toISOString(),
       })
       .eq("id", projectId)
       .eq("user_id", userId);
-    if (error) throw new Error(error.message);
+    if (error) {
+      throw new Error(
+        `woodshed_projects update: ${formatSupabaseClientError(error)}`,
+      );
+    }
   } else {
     const { error } = await supabase.from("woodshed_projects").insert({
       id: projectId,
@@ -101,22 +120,22 @@ export async function upsertCloudProject(
       audio_mime: mime,
       active_loop_id: payload.activeLoopId,
     });
-    if (error) throw new Error(error.message);
+    if (error) {
+      throw new Error(
+        `woodshed_projects insert: ${formatSupabaseClientError(error)}`,
+      );
+    }
   }
-
-  const { error: uploadError } = await supabase.storage
-    .from(WOODSHED_AUDIO_BUCKET)
-    .upload(storagePath, payload.audioBlob, {
-      upsert: true,
-      contentType: mime,
-    });
-  if (uploadError) throw new Error(uploadError.message);
 
   const { error: delLoopErr } = await supabase
     .from("woodshed_project_loops")
     .delete()
     .eq("project_id", projectId);
-  if (delLoopErr) throw new Error(delLoopErr.message);
+  if (delLoopErr) {
+    throw new Error(
+      `woodshed_project_loops delete: ${formatSupabaseClientError(delLoopErr)}`,
+    );
+  }
 
   if (payload.loops.length > 0) {
     const inserts = payload.loops.map((l, i) => ({
@@ -131,7 +150,11 @@ export async function upsertCloudProject(
     const { error: insLoopErr } = await supabase
       .from("woodshed_project_loops")
       .insert(inserts);
-    if (insLoopErr) throw new Error(insLoopErr.message);
+    if (insLoopErr) {
+      throw new Error(
+        `woodshed_project_loops insert: ${formatSupabaseClientError(insLoopErr)}`,
+      );
+    }
   }
 
   return projectId;
@@ -156,7 +179,7 @@ export async function loadCloudProject(
     .eq("id", projectId)
     .maybeSingle();
 
-  if (pErr) throw new Error(pErr.message);
+  if (pErr) throw new Error(formatSupabaseClientError(pErr));
   if (!proj) throw new Error("Project not found.");
 
   const row = proj as ProjectRow;
@@ -167,13 +190,17 @@ export async function loadCloudProject(
     .eq("project_id", projectId)
     .order("sort_index", { ascending: true });
 
-  if (lErr) throw new Error(lErr.message);
+  if (lErr) throw new Error(formatSupabaseClientError(lErr));
 
   const { data: file, error: dErr } = await supabase.storage
     .from(WOODSHED_AUDIO_BUCKET)
     .download(row.audio_storage_path);
 
-  if (dErr) throw new Error(dErr.message);
+  if (dErr) {
+    throw new Error(
+      `Storage download (${WOODSHED_AUDIO_BUCKET} / ${row.audio_storage_path}): ${formatSupabaseClientError(dErr)}`,
+    );
+  }
   if (!file) throw new Error("Audio download failed.");
 
   const buf = await file.arrayBuffer();
