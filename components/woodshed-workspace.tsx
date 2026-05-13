@@ -215,7 +215,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const handleDevExportLoopsJson = useCallback(() => {
     const text = formatLoopsJsonForClipboard(useWoodshedStore.getState().loops);
     if (process.env.NODE_ENV === "development") {
-      // eslint-disable-next-line no-console -- dev-only export fallback
       console.log(text);
     }
     void navigator.clipboard?.writeText(text).catch(() => undefined);

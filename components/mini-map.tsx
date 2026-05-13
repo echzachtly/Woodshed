@@ -17,7 +17,7 @@ type Props = {
   activeLoopId: string | null;
   onNavigate: (seconds: number) => void;
   /** Normalized scrollbar ratio (WaveSurfer `scrollLeft/maxScroll`). */
-  onViewportPanToRatio?: (startRatioNormalized: number) => void;
+  onViewportPanToRatio: (startRatioNormalized: number) => void;
 };
 
 function clampFrac(x: number) {
@@ -153,19 +153,17 @@ export const MiniMap = memo(function MiniMap(props: Props) {
 
           canvas.setPointerCapture(event.pointerId);
           const rect = canvas.getBoundingClientRect();
-          const x = clampFrac((event.clientX - rect.left) / rect.width);
           const w = rect.width;
           const viewXRatio = viewport.startRatio;
           const viewWRatioPx = viewport.durationRatio * w;
           const hitPadPx = Math.max(10, Math.min(viewWRatioPx * 0.2, w * 0.04));
           const viewLeftPx = viewXRatio * w;
           const insideViewport =
-            onViewportPanToRatio &&
             viewport.durationRatio < 0.98 &&
             event.clientX - rect.left >= viewLeftPx - hitPadPx &&
             event.clientX - rect.left <= viewLeftPx + viewWRatioPx + hitPadPx;
 
-          if (insideViewport && onViewportPanToRatio) {
+          if (insideViewport) {
             dragSession.current = {
               mode: "pan",
               pointerId: event.pointerId,
@@ -198,7 +196,7 @@ export const MiniMap = memo(function MiniMap(props: Props) {
             return;
           }
 
-          if (sess.mode === "pan" && onViewportPanToRatio && sess.canvasWidth > 0) {
+          if (sess.mode === "pan" && sess.canvasWidth > 0) {
             const deltaPx = event.clientX - sess.startClientX;
             const deltaRatio = deltaPx / sess.canvasWidth;
             onViewportPanToRatio(clampFrac(sess.anchorScrollRatio + deltaRatio));
