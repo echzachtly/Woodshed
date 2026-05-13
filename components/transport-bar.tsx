@@ -1,7 +1,7 @@
 "use client";
 
 import { Maximize2, Pause, Play, RotateCcw, Upload } from "lucide-react";
-import type { ComponentPropsWithoutRef } from "react";
+import type { ComponentProps } from "react";
 import { memo } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,7 @@ export type AppHeaderProps = {
   onOpenFileClick: () => void;
   onSaveProject: () => void;
   onRestoreProject: (id: string) => void;
-  hiddenFileProps: Omit<ComponentPropsWithoutRef<"input">, "children"> & {
+  hiddenFileProps: Omit<ComponentProps<"input">, "children"> & {
     "data-testid"?: string;
   };
 };
