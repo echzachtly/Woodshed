@@ -47,12 +47,10 @@ type RegionHandle = {
   on: (evt: string, cb: (...args: unknown[]) => void) => void;
 };
 
+/** Resolves via package.json `exports` → `dist/plugins/regions.esm.js` (do not use `plugins/regions.js` — not exported; breaks Vercel/webpack). */
 async function loadRegionsFactory(): Promise<unknown> {
-  try {
-    return (await import("wavesurfer.js/plugins/regions.js")).default;
-  } catch {
-    return (await import("wavesurfer.js/dist/plugins/regions.js")).default;
-  }
+  const mod = await import("wavesurfer.js/plugins/regions");
+  return mod.default;
 }
 
 /** Prefer element clock — slightly ahead of WaveSurfer’s throttled `timeupdate`. */

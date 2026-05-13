@@ -34,12 +34,10 @@ export function ratioFromScroll(
   const maxScroll = scrollWidth - clientWidth;
   const startRatio = maxScroll <= 0 ? 0 : scrollLeft / maxScroll;
   const durationRatio =
-    scrollWidth <= 0 ? 1 : Math.min(1, Math.max(clientWidth / scrollWidth, 0));
-  const adjustedDuration = scrollWidth <= 0 ? 1 : clientWidth / scrollWidth;
-  return {
-    startRatio,
-    durationRatio: adjustedDuration,
-  };
+    scrollWidth <= 0
+      ? 1
+      : Math.min(1, Math.max(clientWidth / scrollWidth, 0));
+  return { startRatio, durationRatio };
 }
 
 export type MinimapClick = {

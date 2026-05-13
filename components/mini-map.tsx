@@ -153,7 +153,6 @@ export const MiniMap = memo(function MiniMap(props: Props) {
 
           canvas.setPointerCapture(event.pointerId);
           const rect = canvas.getBoundingClientRect();
-          const x = clampFrac((event.clientX - rect.left) / rect.width);
           const w = rect.width;
           const viewXRatio = viewport.startRatio;
           const viewWRatioPx = viewport.durationRatio * w;
