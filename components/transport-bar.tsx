@@ -26,6 +26,80 @@ const transportBtn =
 
 const transportGhost = cn(transportBtn, "border-transparent text-stone-300/95");
 
+type SessionPickerProps = {
+  sessionSelectValue: string;
+  demoProjectId: string;
+  demoProjectLabel: string;
+  userProjects: StoredProjectMeta[];
+  cloudProjects: CloudProjectSummary[];
+  showCloudSessions: boolean;
+  onRestoreProject: (id: string) => void | Promise<void>;
+  selectClassName?: string;
+  id?: string;
+};
+
+function SessionPicker({
+  sessionSelectValue,
+  demoProjectId,
+  demoProjectLabel,
+  userProjects,
+  cloudProjects,
+  showCloudSessions,
+  onRestoreProject,
+  selectClassName,
+  id,
+}: SessionPickerProps) {
+  return (
+    <select
+      id={id}
+      className={cn(
+        "h-9 min-w-0 flex-1 rounded-md border border-stone-800/70 bg-stone-950/80 px-2.5 text-xs text-stone-200/95 outline-none sm:text-sm",
+        selectClassName,
+      )}
+      value={sessionSelectValue}
+      aria-label="Switch session"
+      onChange={(e) => {
+        const v = e.target.value;
+        if (!v) return;
+        void onRestoreProject(v);
+      }}
+    >
+      <option value="">Sessions…</option>
+      <optgroup label="Example projects">
+        <option value={demoProjectId}>{`${demoProjectLabel} (built-in)`}</option>
+      </optgroup>
+      <optgroup label="My projects (this device)">
+        {userProjects.length === 0 ? (
+          <option value="" disabled>
+            No saved sessions yet
+          </option>
+        ) : (
+          userProjects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name ?? p.id}
+            </option>
+          ))
+        )}
+      </optgroup>
+      {showCloudSessions ? (
+        <optgroup label="Cloud">
+          {cloudProjects.length === 0 ? (
+            <option value="" disabled>
+              No cloud projects yet
+            </option>
+          ) : (
+            cloudProjects.map((p) => (
+              <option key={p.id} value={cloudSessionPickerValue(p.id)}>
+                {p.name ?? p.id}
+              </option>
+            ))
+          )}
+        </optgroup>
+      ) : null}
+    </select>
+  );
+}
+
 export type AppHeaderProps = {
   projectName: string;
   /** Current value for the session `<select>` (Dexie id or built-in demo id). */
@@ -63,6 +137,11 @@ export type AppHeaderProps = {
    * Only pass when `process.env.NODE_ENV === "development"`.
    */
   devExportLoopsJson?: () => void;
+  /**
+   * Mobile practice mode: stack controls, hide upload, show title as read-only text
+   * (desktop editor header is unchanged when false / omitted).
+   */
+  mobilePracticeLayout?: boolean;
   onRenameProject: (name: string) => void;
   onOpenFileClick: () => void;
   onSaveProject: () => void;
@@ -91,6 +170,7 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
     saveStatusTone = "neutral",
     cloudListError,
     devExportLoopsJson,
+    mobilePracticeLayout = false,
     onRenameProject,
     onOpenFileClick,
     onSaveProject,
@@ -100,121 +180,158 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
 
   return (
     <header className="border-b border-stone-800/55 bg-stone-950 px-4 py-2.5">
-      <div className="mx-auto flex max-w-[1600px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-6">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 lg:max-w-[min(100%,22rem)]">
-          <Label className="sr-only" htmlFor="session-name">
-            Session name
-          </Label>
-          <Input
-            id="session-name"
-            value={projectName}
-            readOnly={Boolean(sessionNameReadOnly)}
-            title={
-              sessionNameReadOnly
-                ? "Rename is disabled for the built-in example project."
-                : undefined
-            }
-            onChange={(e) => onRenameProject(e.target.value)}
-            className="h-9 min-w-0 flex-1 border-stone-800/80 bg-stone-950/80"
-            aria-label="Session name"
-          />
-        </div>
-
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:gap-2.5 lg:justify-center">
-          <input {...hiddenFileProps} />
-          <Button
-            variant="secondary"
-            size="icon"
-            className="h-9 w-9 shrink-0 border-stone-700/70 text-stone-300"
-            aria-label="Open audio file"
-            type="button"
-            onClick={onOpenFileClick}
-          >
-            <Upload className="h-4 w-4" />
-          </Button>
-          <select
-            className="h-9 min-w-0 max-w-[14rem] flex-1 rounded-md border border-stone-800/70 bg-stone-950/80 px-2.5 text-xs text-stone-200/95 outline-none sm:max-w-[18rem] sm:flex-none sm:text-sm"
-            value={sessionSelectValue}
-            aria-label="Switch session"
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) return;
-              void onRestoreProject(v);
-            }}
-          >
-            <option value="">Sessions…</option>
-            <optgroup label="Example projects">
-              <option value={demoProjectId}>{`${demoProjectLabel} (built-in)`}</option>
-            </optgroup>
-            <optgroup label="My projects (this device)">
-              {userProjects.length === 0 ? (
-                <option value="" disabled>
-                  No saved sessions yet
-                </option>
-              ) : (
-                userProjects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name ?? p.id}
-                  </option>
-                ))
+      <div
+        className={cn(
+          "mx-auto flex max-w-[1600px] flex-col gap-3",
+          mobilePracticeLayout
+            ? "gap-3"
+            : "lg:flex-row lg:items-center lg:justify-between lg:gap-6",
+        )}
+      >
+        {mobilePracticeLayout ? (
+          <>
+            <input {...hiddenFileProps} />
+            <div className="flex w-full min-w-0 flex-col gap-2">
+              <Label className="sr-only" htmlFor="mobile-session-picker">
+                Session
+              </Label>
+              <SessionPicker
+                id="mobile-session-picker"
+                sessionSelectValue={sessionSelectValue}
+                demoProjectId={demoProjectId}
+                demoProjectLabel={demoProjectLabel}
+                userProjects={userProjects}
+                cloudProjects={cloudProjects}
+                showCloudSessions={showCloudSessions}
+                onRestoreProject={onRestoreProject}
+                selectClassName="max-w-none w-full"
+              />
+              <Label className="sr-only" htmlFor="mobile-session-title">
+                Current project
+              </Label>
+              <p
+                id="mobile-session-title"
+                className="min-w-0 truncate text-center text-base font-semibold leading-snug text-stone-100"
+                title={projectName}
+              >
+                {projectName}
+              </p>
+            </div>
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <Button
+                variant="secondary"
+                type="button"
+                className="h-9 shrink-0 border-stone-700/70 px-3 text-xs text-stone-200/95"
+                disabled={saveDisabled || saveBusy}
+                title={
+                  saveDisabled
+                    ? "Save is disabled for the built-in example. Upload or open your own session to save."
+                    : undefined
+                }
+                onClick={onSaveProject}
+              >
+                {saveBusy ? (savePendingLabel ?? "Saving…") : saveLabel}
+              </Button>
+              <div className="flex shrink-0 items-center gap-2.5">
+                {isDemoProject ? (
+                  <span
+                    className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
+                    title="Built-in example — use Sessions to open your own saved work"
+                  >
+                    Demo
+                  </span>
+                ) : null}
+                <HeaderAccount />
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2.5",
+                "lg:max-w-[min(100%,22rem)]",
               )}
-            </optgroup>
-            {showCloudSessions ? (
-              <optgroup label="Cloud">
-                {cloudProjects.length === 0 ? (
-                  <option value="" disabled>
-                    No cloud projects yet
-                  </option>
-                ) : (
-                  cloudProjects.map((p) => (
-                    <option
-                      key={p.id}
-                      value={cloudSessionPickerValue(p.id)}
-                    >
-                      {p.name ?? p.id}
-                    </option>
-                  ))
-                )}
-              </optgroup>
-            ) : null}
-          </select>
-          <Button
-            variant="secondary"
-            type="button"
-            className="h-9 shrink-0 border-stone-700/70 px-3 text-xs text-stone-200/95"
-            disabled={saveDisabled || saveBusy}
-            title={
-              saveDisabled
-                ? "Save is disabled for the built-in example. Upload or open your own session to save."
-                : undefined
-            }
-            onClick={onSaveProject}
-          >
-            {saveBusy ? (savePendingLabel ?? "Saving…") : saveLabel}
-          </Button>
-          {devExportLoopsJson ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 border-amber-800/45 bg-amber-950/35 px-2 text-[11px] text-amber-100/90"
-              onClick={devExportLoopsJson}
             >
-              Export Loops JSON
-            </Button>
-          ) : null}
-        </div>
+              <Label className="sr-only" htmlFor="session-name">
+                Session name
+              </Label>
+              <Input
+                id="session-name"
+                value={projectName}
+                readOnly={Boolean(sessionNameReadOnly)}
+                title={
+                  sessionNameReadOnly
+                    ? "Rename is disabled for the built-in example project."
+                    : undefined
+                }
+                onChange={(e) => onRenameProject(e.target.value)}
+                className="h-9 min-w-0 flex-1 border-stone-800/80 bg-stone-950/80"
+                aria-label="Session name"
+              />
+            </div>
 
-        <div className="flex shrink-0 items-center justify-start gap-2.5 sm:justify-end lg:min-w-[12rem]">
-          {isDemoProject ? (
-            <span
-              className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
-              title="Built-in example — use Sessions to open your own saved work"
-            >
-              Demo
-            </span>
-          ) : null}
-          <HeaderAccount />
-        </div>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:gap-2.5 lg:justify-center">
+              <input {...hiddenFileProps} />
+              <Button
+                variant="secondary"
+                size="icon"
+                className="h-9 w-9 shrink-0 border-stone-700/70 text-stone-300"
+                aria-label="Open audio file"
+                type="button"
+                onClick={onOpenFileClick}
+              >
+                <Upload className="h-4 w-4" />
+              </Button>
+              <SessionPicker
+                sessionSelectValue={sessionSelectValue}
+                demoProjectId={demoProjectId}
+                demoProjectLabel={demoProjectLabel}
+                userProjects={userProjects}
+                cloudProjects={cloudProjects}
+                showCloudSessions={showCloudSessions}
+                onRestoreProject={onRestoreProject}
+                selectClassName="max-w-[14rem] sm:max-w-[18rem] sm:flex-none"
+              />
+              <Button
+                variant="secondary"
+                type="button"
+                className="h-9 shrink-0 border-stone-700/70 px-3 text-xs text-stone-200/95"
+                disabled={saveDisabled || saveBusy}
+                title={
+                  saveDisabled
+                    ? "Save is disabled for the built-in example. Upload or open your own session to save."
+                    : undefined
+                }
+                onClick={onSaveProject}
+              >
+                {saveBusy ? (savePendingLabel ?? "Saving…") : saveLabel}
+              </Button>
+              {devExportLoopsJson ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 border-amber-800/45 bg-amber-950/35 px-2 text-[11px] text-amber-100/90"
+                  onClick={devExportLoopsJson}
+                >
+                  Export Loops JSON
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="flex shrink-0 items-center justify-start gap-2.5 sm:justify-end lg:min-w-[12rem]">
+              {isDemoProject ? (
+                <span
+                  className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
+                  title="Built-in example — use Sessions to open your own saved work"
+                >
+                  Demo
+                </span>
+              ) : null}
+              <HeaderAccount />
+            </div>
+          </>
+        )}
       </div>
 
       {cloudListError ? (
@@ -262,6 +379,8 @@ export type WorkspaceTransportBarProps = {
   onToggleLoopPlayback: () => void;
   onTempoSlider: (pct: number) => void;
   formatTime: (t: number) => string;
+  /** Optional class on root `<nav>` (e.g. hide on mobile practice). */
+  className?: string;
 };
 
 /**
@@ -290,12 +409,16 @@ export const WorkspaceTransportBar = memo(function WorkspaceTransportBar(
     onToggleLoopPlayback,
     onTempoSlider,
     formatTime,
+    className: transportClassName,
   } = props;
 
   return (
     <nav
       aria-label="Playback and practice"
-      className="border-b border-stone-800/40 bg-gradient-to-b from-stone-950/90 to-[#0a0908]/95 px-4 py-2.5"
+      className={cn(
+        "border-b border-stone-800/40 bg-gradient-to-b from-stone-950/90 to-[#0a0908]/95 px-4 py-2.5",
+        transportClassName,
+      )}
     >
       <div
         className={cn(
