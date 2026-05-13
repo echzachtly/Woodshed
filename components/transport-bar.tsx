@@ -290,11 +290,26 @@ export const WorkspaceTransportBar = memo(function WorkspaceTransportBar(
             max={150}
             step={1}
             value={[tempoPercent]}
+            title="Double-click to reset tempo to 100%"
             onValueChange={(v) => onTempoSlider(v[0] ?? 100)}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              onTempoSlider(100);
+            }}
           />
-          <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-stone-200">
+          <button
+            type="button"
+            title="Reset tempo to 100%"
+            aria-label="Reset tempo to 100%"
+            className={cn(
+              "w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-stone-200",
+              "cursor-pointer rounded border-0 bg-transparent p-0 transition-colors",
+              "hover:bg-stone-800/35 hover:text-stone-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-400/80",
+            )}
+            onClick={() => onTempoSlider(100)}
+          >
             {Math.round(tempoPercent)}%
-          </span>
+          </button>
         </div>
       </div>
     </nav>

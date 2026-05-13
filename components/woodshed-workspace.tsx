@@ -48,6 +48,35 @@ import {
 } from "@/lib/playhead-sync";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
+/** iOS Safari: combine MIME tokens with extensions so common files stay selectable. */
+const MOBILE_AUDIO_INPUT_ACCEPT =
+  "audio/*,.mp3,.m4a,.aac,.wav,.flac,.aiff,.aif";
+
+const ALLOWED_AUDIO_EXTENSIONS = new Set([
+  "mp3",
+  "m4a",
+  "aac",
+  "wav",
+  "flac",
+  "aiff",
+  "aif",
+]);
+
+/** Accept after pick: real `audio/*` MIME, known extension, or empty/unexpected type with known extension. */
+function isAllowedUploadedAudioFile(file: File): boolean {
+  const mime = (file.type ?? "").trim().toLowerCase();
+  if (mime.startsWith("audio/")) return true;
+
+  const dot = file.name.lastIndexOf(".");
+  const ext =
+    dot >= 0 && dot < file.name.length - 1
+      ? file.name.slice(dot + 1).toLowerCase()
+      : "";
+  if (ext && ALLOWED_AUDIO_EXTENSIONS.has(ext)) return true;
+
+  return false;
+}
+
 type RegionsHandle = {
   clearRegions: () => void;
   addRegion: (opts: Record<string, unknown>) => RegionHandle;
@@ -880,12 +909,24 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         hiddenFileProps={{
           ref: fileInputRef,
           type: "file",
-          accept: "audio/*",
+          accept: MOBILE_AUDIO_INPUT_ACCEPT,
           hidden: true,
           onChange: async (evt) => {
-            const file = evt.target.files?.item(0);
-            if (!file) return;
+            const input = evt.target as HTMLInputElement;
+            const file = input.files?.item(0);
+            if (!file) {
+              input.value = "";
+              return;
+            }
+            if (!isAllowedUploadedAudioFile(file)) {
+              devWarn(
+                "Please choose an audio file (MP3, M4A, AAC, WAV, FLAC, AIFF, …).",
+              );
+              input.value = "";
+              return;
+            }
             await ingestFile(file);
+            input.value = "";
           },
           "aria-hidden": true,
         }}
