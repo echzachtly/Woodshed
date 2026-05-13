@@ -16,8 +16,10 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
+import { cloudSessionPickerValue } from "@/lib/cloud-projects/constants";
 import type { StoredProjectMeta } from "@/lib/project-db";
+import { cn } from "@/lib/utils";
 
 const transportBtn =
   "h-8 gap-1.5 px-2.5 text-xs font-medium border-stone-800/60 text-stone-200";
@@ -32,12 +34,20 @@ export type AppHeaderProps = {
   demoProjectLabel: string;
   /** Saved sessions from local storage (excludes built-in id if present). */
   userProjects: StoredProjectMeta[];
+  /** Cloud-backed sessions (logged-in Supabase). */
+  cloudProjects?: CloudProjectSummary[];
+  /** When true, show the Cloud sessions optgroup (typically same as logged-in). */
+  showCloudSessions?: boolean;
   /** Shown when the built-in demo session is active. */
   isDemoProject?: boolean;
   /** Built-in example: session name is not editable. */
   sessionNameReadOnly?: boolean;
   /** Built-in example: Save is disabled (read-only). */
   saveDisabled?: boolean;
+  /** Optional label for the Save button (e.g. Save to cloud). */
+  saveLabel?: string;
+  /** Disables Save and shows a pending state on the label when combined with saveLabel. */
+  saveBusy?: boolean;
   /**
    * Dev-only: export current loops as JSON (clipboard + console).
    * Only pass when `process.env.NODE_ENV === "development"`.
@@ -59,9 +69,13 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
     demoProjectId,
     demoProjectLabel,
     userProjects,
+    cloudProjects = [],
+    showCloudSessions = false,
     isDemoProject,
     sessionNameReadOnly,
     saveDisabled,
+    saveLabel = "Save",
+    saveBusy = false,
     devExportLoopsJson,
     onRenameProject,
     onOpenFileClick,
@@ -114,7 +128,7 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
           <optgroup label="Example projects">
             <option value={demoProjectId}>{`${demoProjectLabel} (built-in)`}</option>
           </optgroup>
-          <optgroup label="My projects">
+          <optgroup label="My projects (this device)">
             {userProjects.length === 0 ? (
               <option value="" disabled>
                 No saved sessions yet
@@ -127,12 +141,30 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
               ))
             )}
           </optgroup>
+          {showCloudSessions ? (
+            <optgroup label="Cloud">
+              {cloudProjects.length === 0 ? (
+                <option value="" disabled>
+                  No cloud projects yet
+                </option>
+              ) : (
+                cloudProjects.map((p) => (
+                  <option
+                    key={p.id}
+                    value={cloudSessionPickerValue(p.id)}
+                  >
+                    {p.name ?? p.id}
+                  </option>
+                ))
+              )}
+            </optgroup>
+          ) : null}
         </select>
         <Button
           variant="secondary"
           type="button"
           className="h-9 border-stone-700/80 px-3 text-xs"
-          disabled={saveDisabled}
+          disabled={saveDisabled || saveBusy}
           title={
             saveDisabled
               ? "Save is disabled for the built-in example. Upload or open your own session to save."
@@ -140,7 +172,7 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
           }
           onClick={onSaveProject}
         >
-          Save
+          {saveBusy ? "Saving…" : saveLabel}
         </Button>
         {isDemoProject ? (
           <span

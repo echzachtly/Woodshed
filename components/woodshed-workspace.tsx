@@ -12,6 +12,7 @@ import {
 import WaveSurfer from "wavesurfer.js";
 
 import { AppHeader, WorkspaceTransportBar } from "@/components/transport-bar";
+import { useAuth } from "@/components/auth-provider";
 import { LoopSidebar } from "@/components/loop-sidebar";
 import { MiniMap } from "@/components/mini-map";
 import type { VisibleWindow } from "@/lib/waveform-manager";
@@ -30,6 +31,17 @@ import {
   type StoredProjectMeta,
 } from "@/lib/project-db";
 import { devError, devWarn } from "@/lib/dev-log";
+import {
+  listCloudProjectSummaries,
+  loadCloudProject,
+  upsertCloudProject,
+  type CloudProjectSummary,
+} from "@/lib/cloud-projects/client";
+import {
+  cloudSessionPickerValue,
+  isCloudProjectId,
+  parseCloudSessionPickerValue,
+} from "@/lib/cloud-projects/constants";
 import {
   DEMO_PROJECT_DISPLAY_FALLBACK,
   DEMO_PROJECT_ID,
@@ -143,6 +155,12 @@ function buildLoopRail(
 }
 
 const WoodshedWorkspace = memo(function WoodshedWorkspace() {
+  const { user, supabase } = useAuth();
+  const [cloudProjects, setCloudProjects] = useState<CloudProjectSummary[]>(
+    [],
+  );
+  const [cloudSaveBusy, setCloudSaveBusy] = useState(false);
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -252,6 +270,26 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   useEffect(() => {
     listProjects().then(setProjectsList).catch(() => undefined);
   }, []);
+
+  const refreshCloudProjects = useCallback(async () => {
+    if (!user?.id || !supabase) {
+      setCloudProjects([]);
+      return;
+    }
+    try {
+      const list = await listCloudProjectSummaries(supabase);
+      setCloudProjects(list);
+    } catch (e) {
+      devWarn(
+        e instanceof Error ? e.message : "Could not refresh cloud projects.",
+      );
+      setCloudProjects([]);
+    }
+  }, [user?.id, supabase]);
+
+  useEffect(() => {
+    void refreshCloudProjects();
+  }, [refreshCloudProjects]);
 
   useEffect(() => {
     void fetch(DEMO_PROJECT_JSON_PATH, { cache: "no-store" })
@@ -734,25 +772,30 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     }
   }, [primeWaveformCaches]);
 
-  const hydrateProject = useCallback(async (meta: StoredProjectMeta) => {
-    const ws = wavesurferRef.current;
-    if (!ws || !meta.blobId) return;
-    pendingDemoHydrationRef.current = null;
-    demoInitialLoadDoneRef.current = true;
-    pendingHydration.current = meta;
-    useWoodshedStore.getState().resetWorkspace();
-    const blob = await loadBlobRecord(meta.blobId);
-    if (!blob) {
-      pendingHydration.current = null;
-      devWarn("Missing archived audio blob");
-      return;
-    }
-    loopsSignature.current = "";
-    audioBlobRef.current = blob;
-    await primeWaveformCaches(blob);
-    await ws.load(URL.createObjectURL(blob));
-    await listProjects().then(setProjectsList);
-  }, [primeWaveformCaches]);
+  const hydrateProject = useCallback(
+    async (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => {
+      const ws = wavesurferRef.current;
+      if (!ws) return;
+      pendingDemoHydrationRef.current = null;
+      demoInitialLoadDoneRef.current = true;
+      pendingHydration.current = meta;
+      useWoodshedStore.getState().resetWorkspace();
+      const blob =
+        options?.audioBlob ??
+        (meta.blobId ? await loadBlobRecord(meta.blobId) : undefined);
+      if (!blob) {
+        pendingHydration.current = null;
+        devWarn("Missing archived audio blob");
+        return;
+      }
+      loopsSignature.current = "";
+      audioBlobRef.current = blob;
+      await primeWaveformCaches(blob);
+      await ws.load(URL.createObjectURL(blob));
+      await listProjects().then(setProjectsList);
+    },
+    [primeWaveformCaches],
+  );
 
   const persistSession = useCallback(async () => {
     const snapshot = useWoodshedStore.getState();
@@ -766,6 +809,38 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       devWarn("Load audio before saving");
       return;
     }
+
+    if (user?.id && supabase) {
+      setCloudSaveBusy(true);
+      try {
+        const existingCloudId = isCloudProjectId(snapshot.projectId)
+          ? snapshot.projectId
+          : null;
+        const cloudId = await upsertCloudProject(
+          supabase,
+          user.id,
+          existingCloudId,
+          {
+            name: snapshot.projectName,
+            loops: snapshot.loops,
+            activeLoopId: snapshot.activeLoopId,
+            audioBlob: audioBlobRef.current,
+          },
+        );
+        useWoodshedStore
+          .getState()
+          .setProjectMeta(cloudId, snapshot.projectName);
+        await refreshCloudProjects();
+      } catch (e) {
+        devWarn(
+          e instanceof Error ? e.message : "Cloud save failed. Try again.",
+        );
+      } finally {
+        setCloudSaveBusy(false);
+      }
+      return;
+    }
+
     const pid = snapshot.projectId ?? nanoid();
     await saveBlobRecord(pid, audioBlobRef.current, "audio");
     await saveDexieProject({
@@ -777,7 +852,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     });
     useWoodshedStore.getState().setProjectMeta(pid, snapshot.projectName);
     await listProjects().then(setProjectsList);
-  }, []);
+  }, [user?.id, supabase, refreshCloudProjects]);
 
   const handleKeyboard = useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
@@ -880,6 +955,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const sessionSelectValue = useMemo(() => {
     if (!projectId) return "";
     if (projectId === DEMO_PROJECT_ID) return DEMO_PROJECT_ID;
+    if (isCloudProjectId(projectId)) {
+      return cloudSessionPickerValue(projectId);
+    }
     if (userProjectsSelectable.some((p) => p.id === projectId)) return projectId;
     return "";
   }, [projectId, userProjectsSelectable]);
@@ -898,9 +976,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         demoProjectId={DEMO_PROJECT_ID}
         demoProjectLabel={demoPickerTitle}
         userProjects={userProjectsSelectable}
+        cloudProjects={cloudProjects}
+        showCloudSessions={Boolean(user?.id && supabase)}
         isDemoProject={isDemoProject}
         sessionNameReadOnly={isDemoProject}
         saveDisabled={isDemoProject}
+        saveLabel={user?.id && supabase ? "Save to cloud" : "Save"}
+        saveBusy={cloudSaveBusy}
         devExportLoopsJson={
           process.env.NODE_ENV === "development"
             ? handleDevExportLoopsJson
@@ -939,6 +1021,30 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           if (id === DEMO_PROJECT_ID) {
             const ok = await loadBuiltInDemoProject();
             if (ok) await listProjects().then(setProjectsList);
+            return;
+          }
+          const cloudId = parseCloudSessionPickerValue(id);
+          if (cloudId && supabase) {
+            try {
+              const loaded = await loadCloudProject(supabase, cloudId);
+              await hydrateProject(
+                {
+                  id: loaded.id,
+                  name: loaded.name,
+                  loops: loaded.loops,
+                  activeLoopId: loaded.activeLoopId,
+                  updatedAt: loaded.updatedAt,
+                },
+                { audioBlob: loaded.audioBlob },
+              );
+              await refreshCloudProjects();
+            } catch (e) {
+              devWarn(
+                e instanceof Error
+                  ? e.message
+                  : "Could not open this cloud project.",
+              );
+            }
             return;
           }
           const project = await loadDexieProject(id);
