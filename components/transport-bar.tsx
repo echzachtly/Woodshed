@@ -10,6 +10,7 @@ import {
 import type { ComponentProps } from "react";
 import { memo } from "react";
 
+import { HeaderAccount } from "@/components/header-account";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -70,7 +71,7 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
   } = props;
 
   return (
-    <header className="flex flex-col gap-2 border-b border-stone-800/55 bg-stone-950 px-4 py-2.5 sm:flex-row sm:items-center sm:gap-3">
+    <header className="flex flex-col gap-2 border-b border-stone-800/55 bg-stone-950 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
         <Label className="sr-only" htmlFor="session-name">
           Session name
@@ -160,6 +161,7 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
           </Button>
         ) : null}
       </div>
+      <HeaderAccount />
     </header>
   );
 });
