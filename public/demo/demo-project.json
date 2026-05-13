@@ -1,0 +1,36 @@
+{
+  "id": "demo-project",
+  "title": "Demo Blues Practice Project",
+  "audioUrl": "/demo/demo-song.mp3",
+  "activeLoopId": "demo-loop-1",
+  "loops": [
+    {
+      "id": "demo-loop-1",
+      "name": "Intro Lick",
+      "startTime": 3.34,
+      "endTime": 28.337,
+      "tempo": 100
+    },
+    {
+      "id": "demo-loop-2",
+      "name": "Solo 1 - A Section",
+      "startTime": 91.556,
+      "endTime": 115.294,
+      "tempo": 90
+    },
+    {
+      "id": "demo-loop-3",
+      "name": "Solo 1 - B Section",
+      "startTime": 114.507,
+      "endTime": 138.42,
+      "tempo": 100
+    },
+    {
+      "id": "demo-loop-4",
+      "name": "Solo 2 & Ending",
+      "startTime": 169.027,
+      "endTime": 204.893,
+      "tempo": 100
+    }
+  ]
+}

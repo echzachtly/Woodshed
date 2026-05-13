@@ -2,11 +2,22 @@ import WaveSurfer from "wavesurfer.js";
 
 import { scrollPixelsFromNormalizedRatio } from "@/lib/waveform-manager";
 
-function scrollContainer(ws: WaveSurfer | null): HTMLElement | null {
-  const r = ws?.getRenderer?.() as unknown as {
+/** Scroll parent + waveform wrapper (WaveSurfer renderer internals). */
+export function peekWaveSurferDom(ws: WaveSurfer): {
+  scrollContainer: HTMLElement;
+  wrapper: HTMLElement;
+} | null {
+  const r = ws.getRenderer() as unknown as {
     scrollContainer?: HTMLElement | null;
-  } | undefined;
-  return r?.scrollContainer ?? null;
+    getWrapper: () => HTMLElement;
+  };
+  if (!r?.scrollContainer) return null;
+  return { scrollContainer: r.scrollContainer, wrapper: r.getWrapper() };
+}
+
+function scrollContainer(ws: WaveSurfer | null): HTMLElement | null {
+  if (!ws) return null;
+  return peekWaveSurferDom(ws)?.scrollContainer ?? null;
 }
 
 /** Sets WaveSurfer scroll using the renderer’s `.scroll` element (correct scroll parent). */

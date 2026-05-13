@@ -1,6 +1,12 @@
 "use client";
 
-import { Maximize2, Pause, Play, RotateCcw, Upload } from "lucide-react";
+import {
+  ZoomOut,
+  Pause,
+  Play,
+  RotateCcw,
+  Upload,
+} from "lucide-react";
 import type { ComponentProps } from "react";
 import { memo } from "react";
 
@@ -17,11 +23,29 @@ const transportBtn =
 
 export type AppHeaderProps = {
   projectName: string;
-  projects: StoredProjectMeta[];
+  /** Current value for the session `<select>` (Dexie id or built-in demo id). */
+  sessionSelectValue: string;
+  /** Built-in example project id (must match `public/demo/demo-project.json`). */
+  demoProjectId: string;
+  /** Title shown for the built-in example in the picker. */
+  demoProjectLabel: string;
+  /** Saved sessions from local storage (excludes built-in id if present). */
+  userProjects: StoredProjectMeta[];
+  /** Shown when the built-in demo session is active. */
+  isDemoProject?: boolean;
+  /** Built-in example: session name is not editable. */
+  sessionNameReadOnly?: boolean;
+  /** Built-in example: Save is disabled (read-only). */
+  saveDisabled?: boolean;
+  /**
+   * Dev-only: export current loops as JSON (clipboard + console).
+   * Only pass when `process.env.NODE_ENV === "development"`.
+   */
+  devExportLoopsJson?: () => void;
   onRenameProject: (name: string) => void;
   onOpenFileClick: () => void;
   onSaveProject: () => void;
-  onRestoreProject: (id: string) => void;
+  onRestoreProject: (id: string) => void | Promise<void>;
   hiddenFileProps: Omit<ComponentProps<"input">, "children"> & {
     "data-testid"?: string;
   };
@@ -30,7 +54,14 @@ export type AppHeaderProps = {
 export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
   const {
     projectName,
-    projects,
+    sessionSelectValue,
+    demoProjectId,
+    demoProjectLabel,
+    userProjects,
+    isDemoProject,
+    sessionNameReadOnly,
+    saveDisabled,
+    devExportLoopsJson,
     onRenameProject,
     onOpenFileClick,
     onSaveProject,
@@ -47,6 +78,12 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
         <Input
           id="session-name"
           value={projectName}
+          readOnly={Boolean(sessionNameReadOnly)}
+          title={
+            sessionNameReadOnly
+              ? "Rename is disabled for the built-in example project."
+              : undefined
+          }
           onChange={(e) => onRenameProject(e.target.value)}
           className="h-9 min-w-0 flex-1 border-stone-800/80 bg-stone-950/80 sm:max-w-xs"
           aria-label="Session name"
@@ -63,31 +100,65 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
           <Upload className="h-4 w-4" />
         </Button>
         <select
-          className="h-9 min-w-0 max-w-[14rem] rounded-md border border-stone-800/80 bg-stone-950/80 px-2.5 text-xs text-stone-100 outline-none sm:text-sm"
-          defaultValue=""
-          aria-label="Open saved session"
+          className="h-9 min-w-0 max-w-[16rem] rounded-md border border-stone-800/80 bg-stone-950/80 px-2.5 text-xs text-stone-100 outline-none sm:max-w-[18rem] sm:text-sm"
+          value={sessionSelectValue}
+          aria-label="Switch session"
           onChange={(e) => {
-            if (e.target.value) {
-              void onRestoreProject(e.target.value);
-              e.target.selectedIndex = 0;
-            }
+            const v = e.target.value;
+            if (!v) return;
+            void onRestoreProject(v);
           }}
         >
-          <option value="">Open saved session…</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name ?? p.id}
-            </option>
-          ))}
+          <option value="">Sessions…</option>
+          <optgroup label="Example projects">
+            <option value={demoProjectId}>{`${demoProjectLabel} (built-in)`}</option>
+          </optgroup>
+          <optgroup label="My projects">
+            {userProjects.length === 0 ? (
+              <option value="" disabled>
+                No saved sessions yet
+              </option>
+            ) : (
+              userProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name ?? p.id}
+                </option>
+              ))
+            )}
+          </optgroup>
         </select>
         <Button
           variant="secondary"
           type="button"
           className="h-9 border-stone-700/80 px-3 text-xs"
+          disabled={saveDisabled}
+          title={
+            saveDisabled
+              ? "Save is disabled for the built-in example. Upload or open your own session to save."
+              : undefined
+          }
           onClick={onSaveProject}
         >
           Save
         </Button>
+        {isDemoProject ? (
+          <span
+            className="shrink-0 rounded-md border border-violet-400/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-200/95"
+            title="Built-in example — use Sessions to open your own saved work"
+          >
+            Demo
+          </span>
+        ) : null}
+        {devExportLoopsJson ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="h-8 border-amber-800/45 bg-amber-950/35 px-2 text-[11px] text-amber-100/90"
+            onClick={devExportLoopsJson}
+          >
+            Export Loops JSON
+          </Button>
+        ) : null}
       </div>
     </header>
   );
@@ -98,13 +169,14 @@ export type WorkspaceTransportBarProps = {
   currentTime: number;
   isPlaying: boolean;
   loopPlaybackEnabled: boolean;
+  /** True when the active loop has a valid span — required to turn loop playback on. */
+  canEnableLoopPlayback: boolean;
   tempoPercent: number;
-  canFitLoop: boolean;
   onTogglePlay: () => void;
   onStop: () => void;
   onRestartLoop: () => void;
-  onFitToLoop: () => void;
-  onToggleLoopRail: () => void;
+  onResetZoomFullSong: () => void;
+  onToggleLoopPlayback: () => void;
   onTempoSlider: (pct: number) => void;
   formatTime: (t: number) => string;
 };
@@ -117,21 +189,21 @@ export const WorkspaceTransportBar = memo(function WorkspaceTransportBar(
     currentTime,
     isPlaying,
     loopPlaybackEnabled,
+    canEnableLoopPlayback,
     tempoPercent,
-    canFitLoop,
     onTogglePlay,
     onStop,
     onRestartLoop,
-    onFitToLoop,
-    onToggleLoopRail,
+    onResetZoomFullSong,
+    onToggleLoopPlayback,
     onTempoSlider,
     formatTime,
   } = props;
 
   return (
     <nav
-      aria-label="Playback and loop"
-      className="flex flex-col gap-2 border-b border-stone-800/40 bg-gradient-to-b from-stone-950/90 to-[#0a0908]/95 px-4 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3"
+      aria-label="Playback and practice"
+      className="flex flex-col gap-2 border-b border-stone-800/40 bg-gradient-to-b from-stone-950/90 to-[#0a0908]/95 px-4 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2.5"
     >
       <div className="flex flex-wrap items-center gap-1">
         <Button
@@ -164,22 +236,30 @@ export const WorkspaceTransportBar = memo(function WorkspaceTransportBar(
           variant="ghost"
           type="button"
           className={transportBtn}
-          aria-label="Fit waveform to active loop"
-          disabled={!canFitLoop}
-          onClick={onFitToLoop}
+          aria-label="Reset zoom and show full song"
+          disabled={!duration}
+          onClick={onResetZoomFullSong}
         >
-          <Maximize2 className="h-3.5 w-3.5" /> Fit to loop
+          <ZoomOut className="h-3.5 w-3.5" /> Full song
         </Button>
         <Button
           variant={loopPlaybackEnabled ? "outline" : "ghost"}
           type="button"
           className={cn(
             transportBtn,
+            "min-w-0 max-w-[11rem] sm:max-w-none",
             loopPlaybackEnabled && "border-violet-500/35 bg-violet-500/5",
           )}
-          onClick={onToggleLoopRail}
+          aria-pressed={loopPlaybackEnabled}
+          aria-label={
+            loopPlaybackEnabled
+              ? "Turn loop playback off — play the full song"
+              : "Turn loop playback on — repeat the selected section"
+          }
+          disabled={!loopPlaybackEnabled && !canEnableLoopPlayback}
+          onClick={onToggleLoopPlayback}
         >
-          {loopPlaybackEnabled ? "Loop armed" : "Loop off"}
+          {loopPlaybackEnabled ? "Loop Playback: ON" : "Loop Playback: OFF"}
         </Button>
       </div>
 

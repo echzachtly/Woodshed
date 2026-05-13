@@ -14,8 +14,6 @@
   --loop-active-border: rgba(233, 213, 255, 0.78);
   --loop-inactive: rgba(100, 116, 139, 0.18);
   --loop-inactive-border: rgba(148, 163, 184, 0.28);
-  /** Playback cursor — amber-400, calmer glow in ::part(cursor). */
-  --cursor: #fbbf24;
 }
 
 @theme inline {
@@ -36,15 +34,9 @@ body {
     sans-serif;
 }
 
-/**
- * WaveSurfer renders into a closed-ish shadow DOM but exposes `part` selectors.
- * We pierce the shadow to add a soft cursor glow without forking the library.
- */
+/** WaveSurfer cursor part — hidden; playback is shown only via waveform fill. */
 ::part(cursor) {
-  background-color: var(--cursor) !important;
-  box-shadow:
-    0 0 4px rgba(251, 191, 36, 0.55),
-    0 0 12px rgba(251, 191, 36, 0.22);
+  display: none !important;
 }
 
 /** Belt-and-suspenders: also hide any horizontal scrollbar inside the waveform host. */

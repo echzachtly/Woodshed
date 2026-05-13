@@ -20,7 +20,6 @@ import {
   type LoopRail,
   type MediaPlaybackSurface,
 } from "@/lib/audio-engine";
-import { detectTransientSeconds } from "@/lib/transient-engine";
 import type { PracticeLoop } from "@/lib/loop-engine";
 import {
   listProjects,
@@ -31,8 +30,22 @@ import {
   type StoredProjectMeta,
 } from "@/lib/project-db";
 import { devError, devWarn } from "@/lib/dev-log";
+import {
+  DEMO_PROJECT_DISPLAY_FALLBACK,
+  DEMO_PROJECT_ID,
+  DEMO_PROJECT_JSON_PATH,
+  demoRowsToPracticeLoops,
+  formatLoopsJsonForClipboard,
+  parseDemoProjectFile,
+  resolveDemoAudioBlob,
+  type PendingDemoHydration,
+} from "@/lib/demo-project";
 import { nanoid } from "@/lib/id";
-import { setWaveNormalizedScroll } from "@/lib/waveform-scroll";
+import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
+import {
+  PLAYHEAD_UI_TIME_MS,
+  readPlaybackSeconds,
+} from "@/lib/playhead-sync";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 type RegionsHandle = {
@@ -47,25 +60,15 @@ type RegionHandle = {
   on: (evt: string, cb: (...args: unknown[]) => void) => void;
 };
 
-/** Explicit `dist` path — stable with Next/webpack on Vercel (avoid `plugins/regions.js`; it is not on disk). */
 async function loadRegionsFactory(): Promise<unknown> {
   const mod = await import("wavesurfer.js/dist/plugins/regions.esm.js");
   return mod.default;
 }
 
-/** Prefer element clock — slightly ahead of WaveSurfer’s throttled `timeupdate`. */
-function readPlaybackSeconds(ws: WaveSurfer): number {
-  const media = ws.getMediaElement();
-  if (media && Number.isFinite(media.currentTime)) {
-    return media.currentTime;
-  }
-  return ws.getCurrentTime();
-}
-
 function makeSurface(ws: WaveSurfer): MediaPlaybackSurface {
   return {
     getDuration: () => ws.getDuration(),
-    getCurrentTime: () => ws.getCurrentTime(),
+    getCurrentTime: () => readPlaybackSeconds(ws),
     seek: (t) => ws.setTime(t),
     play: () => {
       void ws.play();
@@ -110,26 +113,18 @@ function buildLoopRail(
   return { enabled: true, start: target.start, end: target.end };
 }
 
-function peekWaveSurferDom(ws: WaveSurfer): {
-  scrollContainer: HTMLElement;
-  wrapper: HTMLElement;
-} | null {
-  const r = ws.getRenderer() as unknown as {
-    scrollContainer?: HTMLElement | null;
-    getWrapper: () => HTMLElement;
-  };
-  if (!r?.scrollContainer) return null;
-  return { scrollContainer: r.scrollContainer, wrapper: r.getWrapper() };
-}
-
 const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioBlobRef = useRef<Blob | null>(null);
   const pendingHydration = useRef<StoredProjectMeta | null>(null);
+  const pendingDemoHydrationRef = useRef<PendingDemoHydration | null>(null);
+  const demoInitialLoadDoneRef = useRef(false);
   const loopsSignature = useRef<string>("");
   const wheelBound = useRef(false);
+  /** Ignore scroll events briefly after programmatic phrase fit (loop-focused viewport). */
+  const suppressViewportScrollUntilRef = useRef(0);
   /** Stops tight loop RAF from the effect cleanup (see mount IIFE). */
   const cancelPlaybackLoopRef = useRef<(() => void) | null>(null);
 
@@ -137,6 +132,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const regionsRef = useRef<RegionsHandle | null>(null);
 
   const [projects, setProjectsList] = useState<StoredProjectMeta[]>([]);
+  const [demoPickerTitle, setDemoPickerTitle] = useState(
+    DEMO_PROJECT_DISPLAY_FALLBACK,
+  );
   const [decodedPeaks, setDecodedPeaks] = useState<Float32Array | null>(null);
   const [viewport, setViewport] = useState<VisibleWindow>({
     startRatio: 0,
@@ -149,18 +147,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const activeLoopId = useWoodshedStore((s) => s.activeLoopId);
   const duration = useWoodshedStore((s) => s.duration);
   const minPxPerSec = useWoodshedStore((s) => s.minPxPerSec);
-  const transientTimes = useWoodshedStore((s) => s.transientTimes);
-  const snapAssist = useWoodshedStore((s) => s.snapAssist);
-  const autoScrollDuringPlayback = useWoodshedStore(
-    (s) => s.autoScrollDuringPlayback,
-  );
   const loopPlaybackEnabled = useWoodshedStore((s) => s.loopPlaybackEnabled);
+  const loopFocusTick = useWoodshedStore((s) => s.loopFocusTick);
   const isPlaying = useWoodshedStore((s) => s.isPlaying);
   const currentTime = useWoodshedStore((s) => s.currentTime);
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === activeLoopId),
     [activeLoopId, loops],
   );
+
+  const isDemoProject = projectId === DEMO_PROJECT_ID;
 
   const formatTime = useCallback((seconds: number) => {
     if (!Number.isFinite(seconds) || seconds < 0) return "0:00.00";
@@ -169,31 +165,74 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     return `${m}:${s.toFixed(2).padStart(5, "0")}`;
   }, []);
 
-  const handleFitToLoop = useCallback(() => {
+  /** Fit waveform to `loop` and update store zoom; returns false if layout not ready. */
+  const applyPhraseFitToLoop = useCallback((loop: PracticeLoop) => {
     const ws = wavesurferRef.current;
-    if (!ws || !activeLoop) return;
-    const loopDuration = activeLoop.end - activeLoop.start;
-    if (loopDuration <= 0) return;
+    if (!ws) return false;
+    const span = loop.end - loop.start;
+    if (span <= 0) return false;
     const dom = peekWaveSurferDom(ws);
     const container = dom?.scrollContainer;
-    if (!container) return;
+    if (!container) return false;
     const clientWidth = container.clientWidth;
-    if (clientWidth <= 0) return;
-    /** Leave a touch of room on either side so handles stay reachable. */
+    if (clientWidth <= 0) return false;
     const targetWidth = clientWidth * 0.94;
-    const nextPxPerSec = Math.max(
-      4,
-      Math.min(1500, targetWidth / loopDuration),
-    );
+    const nextPxPerSec = Math.max(4, Math.min(1500, targetWidth / span));
     useWoodshedStore.getState().setMinPxPerSec(nextPxPerSec);
     ws.zoom(nextPxPerSec);
-    const padPx = (clientWidth - loopDuration * nextPxPerSec) / 2;
-    const startPx = activeLoop.start * nextPxPerSec - Math.max(0, padPx);
+    const padPx = (clientWidth - span * nextPxPerSec) / 2;
+    const startPx = loop.start * nextPxPerSec - Math.max(0, padPx);
     ws.setScroll(Math.max(0, startPx));
-  }, [activeLoop]);
+    return true;
+  }, []);
+
+  const handleResetZoomFullSong = useCallback(() => {
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+    const st = useWoodshedStore.getState();
+    if (st.viewportMode === "loop-focused") {
+      st.setViewportMode("follow");
+    }
+    const d = ws.getDuration();
+    const dom = peekWaveSurferDom(ws);
+    const clientWidth = dom?.scrollContainer?.clientWidth ?? 0;
+    suppressViewportScrollUntilRef.current = performance.now() + 220;
+    if (d > 0 && clientWidth > 0) {
+      const fitAll = Math.max(
+        4,
+        Math.min(1500, (clientWidth * 0.98) / d),
+      );
+      st.setMinPxPerSec(fitAll);
+      ws.zoom(fitAll);
+      ws.setScroll(0);
+    } else {
+      st.setMinPxPerSec(50);
+      ws.zoom(50);
+      ws.setScroll(0);
+    }
+  }, []);
+
+  const handleDevExportLoopsJson = useCallback(() => {
+    const text = formatLoopsJsonForClipboard(useWoodshedStore.getState().loops);
+    if (process.env.NODE_ENV === "development") {
+      // eslint-disable-next-line no-console -- dev-only export fallback
+      console.log(text);
+    }
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     listProjects().then(setProjectsList).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    void fetch(DEMO_PROJECT_JSON_PATH, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw: unknown) => {
+        const p = parseDemoProjectFile(raw);
+        if (p?.title) setDemoPickerTitle(p.title);
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -204,18 +243,46 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     try {
       const decoded = await analyzeAudioEnvelope(blob);
       if (!decoded) return;
-      useWoodshedStore.getState().setTransients(
-        detectTransientSeconds(
-          Float32Array.from(decoded.getChannelData(0)),
-          decoded.sampleRate,
-          { sensitivity: 0.4 },
-        ),
-      );
       setDecodedPeaks(Float32Array.from(decoded.getChannelData(0)));
     } catch {
       /* optional */
     }
   }, []);
+
+  const loadBuiltInDemoProjectRef = useRef<() => Promise<boolean>>(
+    async () => false,
+  );
+
+  const loadBuiltInDemoProject = useCallback(async (): Promise<boolean> => {
+    const ws = wavesurferRef.current;
+    if (!ws) return false;
+    pendingHydration.current = null;
+    pendingDemoHydrationRef.current = null;
+    try {
+      const res = await fetch(DEMO_PROJECT_JSON_PATH, { cache: "no-store" });
+      if (!res.ok) return false;
+      const raw: unknown = await res.json();
+      const parsed = parseDemoProjectFile(raw);
+      if (!parsed) return false;
+      const audioBlob = await resolveDemoAudioBlob(parsed.audioUrl);
+      useWoodshedStore.getState().resetWorkspace();
+      pendingDemoHydrationRef.current = parsed;
+      audioBlobRef.current = audioBlob;
+      loopsSignature.current = "";
+      await primeWaveformCaches(audioBlob);
+      if (pendingHydration.current) {
+        pendingDemoHydrationRef.current = null;
+        return false;
+      }
+      await ws.load(URL.createObjectURL(audioBlob));
+      return true;
+    } catch {
+      devWarn("Built-in demo could not be loaded");
+      return false;
+    }
+  }, [primeWaveformCaches]);
+
+  loadBuiltInDemoProjectRef.current = loadBuiltInDemoProject;
 
   useEffect(() => {
     let destroyed = false;
@@ -224,6 +291,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       typeof window === "undefined"
         ? 50
         : useWoodshedStore.getState().minPxPerSec;
+    const snapInit = useWoodshedStore.getState();
+    const initialAutoScroll = !snapInit.loopPlaybackEnabled;
 
     void (async () => {
       const host = containerRef.current;
@@ -235,10 +304,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         container: host,
         /** `auto` lets the waveform fill the (much taller) flex container — see layout below. */
         height: "auto",
-        cursorColor: "#fbbf24",
-        cursorWidth: 2,
-        waveColor: "#3f3b37",
-        progressColor: "#d4c4fc",
+        cursorColor: "transparent",
+        cursorWidth: 0,
+        waveColor: "#342f2c",
+        progressColor: "#d8c8fc",
         barWidth: 1,
         barGap: 0,
         normalize: true,
@@ -248,6 +317,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         fillParent: false,
         minPxPerSec: starterZoom,
         dragToSeek: true,
+        autoScroll: initialAutoScroll,
+        autoCenter: initialAutoScroll,
       });
 
       const regionsCtor = Factory as {
@@ -313,6 +384,23 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       ws.on("scroll", updateViewport);
       ws.on("zoom", updateViewport);
 
+      const peekPan = peekWaveSurferDom(ws);
+      if (peekPan) {
+        peekPan.scrollContainer.addEventListener(
+          "scroll",
+          () => {
+            if (performance.now() < suppressViewportScrollUntilRef.current) {
+              return;
+            }
+            const st = useWoodshedStore.getState();
+            if (st.viewportMode === "loop-focused") {
+              st.setViewportMode("follow");
+            }
+          },
+          { passive: true },
+        );
+      }
+
       ws.on("dblclick", (relativeX) => {
         const dur = ws.getDuration();
         if (!dur) return;
@@ -326,12 +414,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           );
       });
 
+      let lastTransportUiMs = 0;
+
       ws.on("timeupdate", (t) => {
-        useWoodshedStore.getState().setCurrentTime(t);
+        if (destroyed) return;
+        const tSec =
+          typeof t === "number" && Number.isFinite(t)
+            ? t
+            : readPlaybackSeconds(ws);
+        const now = performance.now();
+        if (
+          !ws.isPlaying() ||
+          now - lastTransportUiMs >= PLAYHEAD_UI_TIME_MS
+        ) {
+          lastTransportUiMs = now;
+          useWoodshedStore.getState().setCurrentTime(tSec);
+        }
       });
 
       ws.on("play", () => {
         useWoodshedStore.getState().setPlaying(true);
+        lastTransportUiMs = 0;
         cancelTightLoop();
         tightLoopRaf = requestAnimationFrame(loopBoundaryStep);
       });
@@ -348,6 +451,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         const state = useWoodshedStore.getState();
         state.setDuration(dur);
         const pending = pendingHydration.current;
+        const demo = pendingDemoHydrationRef.current;
         if (pending) {
           state.setProjectMeta(pending.id, pending.name);
           state.upsertLoops(pending.loops);
@@ -358,6 +462,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             state.selectLoop(pending.activeLoopId);
           }
           pendingHydration.current = null;
+        } else if (demo) {
+          const loops = demoRowsToPracticeLoops(demo.loopRows, dur);
+          state.setProjectMeta(demo.projectId, demo.title);
+          state.upsertLoops(loops);
+          const active =
+            demo.activeLoopId &&
+            loops.some((l) => l.id === demo.activeLoopId)
+              ? demo.activeLoopId
+              : (loops[0]?.id ?? null);
+          if (active) state.selectLoop(active);
+          pendingDemoHydrationRef.current = null;
         } else if (state.loops.length === 0) {
           state.bootstrapFromDuration(dur);
         }
@@ -373,6 +488,24 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           /* optional */
         }
       });
+
+      const tryLoadBuiltInDemo = async () => {
+        if (demoInitialLoadDoneRef.current) return;
+        if (destroyed) return;
+        const wsLocal = wavesurferRef.current;
+        if (!wsLocal) return;
+        if (audioBlobRef.current) return;
+        if (pendingHydration.current) return;
+
+        demoInitialLoadDoneRef.current = true;
+
+        const ok = await loadBuiltInDemoProjectRef.current();
+        if (!ok) {
+          demoInitialLoadDoneRef.current = false;
+        }
+      };
+
+      void tryLoadBuiltInDemo();
 
       updateViewport();
     })();
@@ -394,6 +527,38 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (!ws) return;
     ws.zoom(minPxPerSec);
   }, [minPxPerSec]);
+
+  useEffect(() => {
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+    const st = useWoodshedStore.getState();
+    if (!st.loopPlaybackEnabled) {
+      st.setViewportMode("follow");
+      return;
+    }
+    const loop = st.loops.find((l) => l.id === st.activeLoopId);
+    if (!loop || loop.end <= loop.start) {
+      st.setViewportMode("follow");
+      return;
+    }
+    suppressViewportScrollUntilRef.current = performance.now() + 220;
+    if (!applyPhraseFitToLoop(loop)) {
+      useWoodshedStore.getState().setViewportMode("follow");
+      return;
+    }
+    useWoodshedStore.getState().setViewportMode("loop-focused");
+  }, [loopPlaybackEnabled, activeLoopId, loopFocusTick, applyPhraseFitToLoop]);
+
+  useEffect(() => {
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+    /** While loop playback is on, never auto-scroll the waveform — even after manual pan unlocks loop-focused view. */
+    const followPlayback = !loopPlaybackEnabled;
+    ws.setOptions({
+      autoScroll: followPlayback,
+      autoCenter: followPlayback,
+    });
+  }, [loopPlaybackEnabled]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;
@@ -448,6 +613,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         el.addEventListener("pointerleave", onLeave);
       });
 
+      region.on("click", () => {
+        useWoodshedStore.getState().selectLoop(loop.id);
+      });
+
       region.on("update-end", (payload: unknown) => {
         const updated = typeof payload === "object" && payload && "region" in (payload as object)
           ? ((payload as { region?: RegionHandle }).region ?? region)
@@ -461,12 +630,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             ? ((updated as { end: number }).end)
             : region.end;
 
-        useWoodshedStore.getState().updateLoopBounds(
-          loop.id,
-          regionStart,
-          regionEnd,
-          { transientSnap: transientTimes },
-        );
+        useWoodshedStore
+          .getState()
+          .updateLoopBounds(loop.id, regionStart, regionEnd);
       });
     });
 
@@ -480,6 +646,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           const target = useWoodshedStore.getState();
           if (!wavesurferRef.current) return;
           event.preventDefault();
+          if (target.viewportMode === "loop-focused") {
+            target.setViewportMode("follow");
+          }
           const factor = Math.exp(event.deltaY * -0.0015);
           const next = Math.min(
             1500,
@@ -505,12 +674,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         useWoodshedStore.getState().setHoverTime(null),
       );
     }
-  }, [loops, activeLoopId, transientTimes]);
+  }, [loops, activeLoopId]);
 
   const ingestFile = useCallback(async (blob: Blob) => {
     const ws = wavesurferRef.current;
     if (!ws) return;
 
+    pendingDemoHydrationRef.current = null;
+    demoInitialLoadDoneRef.current = true;
+
+    useWoodshedStore.getState().resetWorkspace();
     audioBlobRef.current =
       blob instanceof File ? blob : new Blob([await blob.arrayBuffer()]);
     loopsSignature.current = "";
@@ -536,6 +709,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const hydrateProject = useCallback(async (meta: StoredProjectMeta) => {
     const ws = wavesurferRef.current;
     if (!ws || !meta.blobId) return;
+    pendingDemoHydrationRef.current = null;
+    demoInitialLoadDoneRef.current = true;
     pendingHydration.current = meta;
     useWoodshedStore.getState().resetWorkspace();
     const blob = await loadBlobRecord(meta.blobId);
@@ -553,6 +728,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const persistSession = useCallback(async () => {
     const snapshot = useWoodshedStore.getState();
+    if (snapshot.projectId === DEMO_PROJECT_ID) {
+      devWarn(
+        "The built-in example project is read-only. Open a saved session or upload audio, then use Save to store your own copy.",
+      );
+      return;
+    }
     if (!audioBlobRef.current) {
       devWarn("Load audio before saving");
       return;
@@ -631,12 +812,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         case "PageDown": {
           event.preventDefault();
           const zs = useWoodshedStore.getState();
+          if (zs.viewportMode === "loop-focused") zs.setViewportMode("follow");
           zs.setMinPxPerSec(zs.minPxPerSec / 1.22);
           break;
         }
         case "PageUp": {
           event.preventDefault();
           const zp = useWoodshedStore.getState();
+          if (zp.viewportMode === "loop-focused") zp.setViewportMode("follow");
           zp.setMinPxPerSec(zp.minPxPerSec * 1.22);
           break;
         }
@@ -661,6 +844,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     [activeLoopId, duration, loops],
   );
 
+  const userProjectsSelectable = useMemo(
+    () => projects.filter((p) => p.id !== DEMO_PROJECT_ID),
+    [projects],
+  );
+
+  const sessionSelectValue = useMemo(() => {
+    if (!projectId) return "";
+    if (projectId === DEMO_PROJECT_ID) return DEMO_PROJECT_ID;
+    if (userProjectsSelectable.some((p) => p.id === projectId)) return projectId;
+    return "";
+  }, [projectId, userProjectsSelectable]);
+
   return (
     <section
       ref={sectionRef}
@@ -671,7 +866,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     >
       <AppHeader
         projectName={projectName}
-        projects={projects}
+        sessionSelectValue={sessionSelectValue}
+        demoProjectId={DEMO_PROJECT_ID}
+        demoProjectLabel={demoPickerTitle}
+        userProjects={userProjectsSelectable}
+        isDemoProject={isDemoProject}
+        sessionNameReadOnly={isDemoProject}
+        saveDisabled={isDemoProject}
+        devExportLoopsJson={
+          process.env.NODE_ENV === "development"
+            ? handleDevExportLoopsJson
+            : undefined
+        }
         hiddenFileProps={{
           ref: fileInputRef,
           type: "file",
@@ -689,12 +895,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         }
         onOpenFileClick={() => fileInputRef.current?.click()}
         onSaveProject={() => void persistSession()}
-        onRestoreProject={(id) =>
-          loadDexieProject(id).then(async (project) => {
-            if (!project) return;
-            await hydrateProject(project);
-          })
-        }
+        onRestoreProject={async (id) => {
+          if (id === DEMO_PROJECT_ID) {
+            const ok = await loadBuiltInDemoProject();
+            if (ok) await listProjects().then(setProjectsList);
+            return;
+          }
+          const project = await loadDexieProject(id);
+          if (!project) return;
+          await hydrateProject(project);
+        }}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
@@ -704,8 +914,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             currentTime={currentTime}
             isPlaying={isPlaying}
             loopPlaybackEnabled={loopPlaybackEnabled}
+            canEnableLoopPlayback={Boolean(
+              activeLoop && activeLoop.end > activeLoop.start,
+            )}
             tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-            canFitLoop={Boolean(activeLoop && activeLoop.end > activeLoop.start)}
             onTogglePlay={() => {
               const ws = wavesurferRef.current;
               if (!ws) return;
@@ -716,6 +928,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               wavesurferRef.current?.pause();
               wavesurferRef.current?.setTime(0);
               useWoodshedStore.getState().setPlaying(false);
+              useWoodshedStore.getState().setCurrentTime(0);
             }}
             onRestartLoop={() => {
               const ws = wavesurferRef.current;
@@ -725,8 +938,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               ws.setTime(rail.start);
               void ws.play();
             }}
-            onFitToLoop={handleFitToLoop}
-            onToggleLoopRail={() =>
+            onResetZoomFullSong={handleResetZoomFullSong}
+            onToggleLoopPlayback={() =>
               useWoodshedStore
                 .getState()
                 .setLoopPlaybackEnabled(!loopPlaybackEnabled)
@@ -758,11 +971,19 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             viewport={viewport}
             currentTime={currentTime}
             onNavigate={(seconds) => {
+              const st = useWoodshedStore.getState();
+              if (st.viewportMode === "loop-focused") {
+                st.setViewportMode("follow");
+              }
               wavesurferRef.current?.setTime(seconds);
             }}
-            onViewportPanToRatio={(ratio) =>
-              setWaveNormalizedScroll(wavesurferRef.current, ratio)
-            }
+            onViewportPanToRatio={(ratio) => {
+              const st = useWoodshedStore.getState();
+              if (st.viewportMode === "loop-focused") {
+                st.setViewportMode("follow");
+              }
+              setWaveNormalizedScroll(wavesurferRef.current, ratio);
+            }}
           />
         </div>
 
@@ -775,16 +996,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           }
           onAddLoop={() => useWoodshedStore.getState().addLoopCandidate()}
           onRemoveLoop={(id) => useWoodshedStore.getState().removeLoop(id)}
-          snapAssist={snapAssist}
-          onSnapAssistChange={(value) =>
-            useWoodshedStore.getState().setSnapAssist(value)
-          }
-          autoScroll={autoScrollDuringPlayback}
-          onAutoScrollToggle={() =>
-            useWoodshedStore
-              .getState()
-              .setAutoScroll(!autoScrollDuringPlayback)
-          }
         />
       </div>
     </section>

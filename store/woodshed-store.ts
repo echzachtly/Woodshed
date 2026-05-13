@@ -5,9 +5,11 @@ import {
   createInitialLoop,
   loopFromBounds,
   type PracticeLoop,
-  softSnapSeconds,
 } from "@/lib/loop-engine";
 import { nanoid } from "@/lib/id";
+
+/** Waveform viewport: follow playhead vs loop-focused zoom once (until user pans/zooms). */
+export type ViewportMode = "follow" | "loop-focused";
 
 export type WoodshedState = {
   projectId: string | null;
@@ -17,14 +19,21 @@ export type WoodshedState = {
   activeLoopId: string | null;
   isPlaying: boolean;
   currentTime: number;
+  /** When true, playback repeats the selected loop; waveform auto-follow is off. */
   loopPlaybackEnabled: boolean;
   /** Main waveform zoom (WaveSurfer minPxPerSec) */
   minPxPerSec: number;
   hoverTime: number | null;
-  transientTimes: number[];
-  /** 0 = off, 1 = strongest assist */
-  snapAssist: number;
-  autoScrollDuringPlayback: boolean;
+  /**
+   * `follow` — WaveSurfer keeps the play position in view during playback.
+   * `loop-focused` — viewport was fitted to the active loop once; user pan/zoom returns to follow layout.
+   */
+  viewportMode: ViewportMode;
+  /**
+   * Incremented whenever the user explicitly selects a practice loop (including re-selecting the same one)
+   * so the workspace can refit the waveform once.
+   */
+  loopFocusTick: number;
   /** True when creating loop from double-click / drag */
   pendingLoopDrag: { start: number; end: number } | null;
 };
@@ -39,9 +48,7 @@ type WoodshedActions = {
   setLoopPlaybackEnabled: (flag: boolean) => void;
   setMinPxPerSec: (v: number) => void;
   setHoverTime: (t: number | null) => void;
-  setTransients: (times: number[]) => void;
-  setSnapAssist: (v: number) => void;
-  setAutoScroll: (flag: boolean) => void;
+  setViewportMode: (mode: ViewportMode) => void;
   upsertLoops: (loops: PracticeLoop[]) => void;
   addLoopCandidate: () => void;
   addLoopAround: (
@@ -51,15 +58,7 @@ type WoodshedActions = {
   ) => PracticeLoop | null;
   selectLoop: (id: string | null) => void;
   renameLoop: (id: string, name: string) => void;
-  updateLoopBounds: (
-    id: string,
-    start: number,
-    end: number,
-    opts?: {
-      transientSnap?: readonly number[];
-      transientThresholdSec?: number;
-    },
-  ) => void;
+  updateLoopBounds: (id: string, start: number, end: number) => void;
   removeLoop: (id: string) => void;
   nudgeLoopEdge: (edge: "start" | "end", deltaSec: number) => void;
   bumpTempo: (delta: number) => void;
@@ -81,12 +80,11 @@ const initialState: WoodshedState = {
   activeLoopId: null,
   isPlaying: false,
   currentTime: 0,
-  loopPlaybackEnabled: true,
+  loopPlaybackEnabled: false,
   minPxPerSec: 50,
   hoverTime: null,
-  transientTimes: [],
-  snapAssist: 0.45,
-  autoScrollDuringPlayback: true,
+  viewportMode: "follow",
+  loopFocusTick: 0,
   pendingLoopDrag: null,
 };
 
@@ -99,24 +97,27 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
   resetWorkspace: () => set({ ...initialState }),
   bootstrapFromDuration: (duration) => {
     const loop = createInitialLoop(duration);
-    set({
+    set((state) => ({
       duration,
       loops: [loop],
       activeLoopId: loop.id,
-    });
+      loopPlaybackEnabled: true,
+      loopFocusTick: state.loopFocusTick + 1,
+    }));
   },
   setProjectMeta: (projectId, projectName) => set({ projectId, projectName }),
   setDuration: (duration) => set({ duration }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentTime: (currentTime) => set({ currentTime }),
-  setLoopPlaybackEnabled: (loopPlaybackEnabled) => set({ loopPlaybackEnabled }),
+  setLoopPlaybackEnabled: (loopPlaybackEnabled) =>
+    set({
+      loopPlaybackEnabled,
+      ...(!loopPlaybackEnabled ? { viewportMode: "follow" as const } : {}),
+    }),
   setMinPxPerSec: (minPxPerSec) =>
     set({ minPxPerSec: Math.max(4, Math.min(1500, minPxPerSec)) }),
   setHoverTime: (hoverTime) => set({ hoverTime }),
-  setTransients: (transientTimes) => set({ transientTimes }),
-  setSnapAssist: (snapAssist) =>
-    set({ snapAssist: Math.min(1, Math.max(0, snapAssist)) }),
-  setAutoScroll: (autoScrollDuringPlayback) => set({ autoScrollDuringPlayback }),
+  setViewportMode: (viewportMode) => set({ viewportMode }),
   upsertLoops: (loops) => set({ loops }),
   addLoopCandidate: () => {
     const { duration, loops, activeLoopId } = get();
@@ -130,10 +131,12 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       : Math.min(Math.max(0, duration - span), duration * 0.5);
     const end = Math.min(duration, start + span);
     const created = loopFromBounds(start, end, duration, `Section ${loops.length + 1}`);
-    set({
+    set((state) => ({
       loops: [...loops, created],
       activeLoopId: created.id,
-    });
+      loopPlaybackEnabled: true,
+      loopFocusTick: state.loopFocusTick + 1,
+    }));
   },
   addLoopAround: (mid, halfWidthSec = 2, baseName) => {
     const { duration } = get();
@@ -153,32 +156,41 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set((s) => ({
       loops: [...s.loops, phrase],
       activeLoopId: phrase.id,
+      loopPlaybackEnabled: true,
+      loopFocusTick: s.loopFocusTick + 1,
     }));
     return phrase;
   },
-  selectLoop: (activeLoopId) => set({ activeLoopId }),
+  selectLoop: (activeLoopId) =>
+    set((s) => {
+      if (activeLoopId === null) {
+        return {
+          activeLoopId: null,
+          loopPlaybackEnabled: false,
+          viewportMode: "follow",
+          loopFocusTick: s.loopFocusTick + 1,
+        };
+      }
+      const loop = s.loops.find((l) => l.id === activeLoopId);
+      const playback = Boolean(loop && loop.end > loop.start);
+      return {
+        activeLoopId,
+        loopPlaybackEnabled: playback,
+        loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
+        ...(!playback ? { viewportMode: "follow" as const } : {}),
+      };
+    }),
   renameLoop: (id, name) =>
     set((s) => ({
       loops: s.loops.map((l) => (l.id === id ? { ...l, name } : l)),
     })),
-  updateLoopBounds: (id, start, end, opts) => {
-    const { duration, transientTimes, snapAssist } = get();
+  updateLoopBounds: (id, start, end) => {
+    const { duration } = get();
     if (!duration) return;
     let s = Math.max(0, Math.min(start, end));
     let e = Math.min(duration, Math.max(start, end));
     const minSpan = Math.min(0.05, duration * 0.001);
     if (e - s < minSpan) e = Math.min(duration, s + minSpan);
-
-    const snapList = opts?.transientSnap ?? transientTimes;
-    const baseThreshold =
-      typeof opts?.transientThresholdSec === "number"
-        ? opts.transientThresholdSec
-        : 0.02 + snapAssist * 0.12;
-    if (snapList.length && snapAssist > 0) {
-      s = softSnapSeconds(s, snapList, baseThreshold);
-      e = softSnapSeconds(e, snapList, baseThreshold);
-      if (e - s < minSpan) e = Math.min(duration, s + minSpan);
-    }
 
     set((state) => ({
       loops: state.loops.map((l) =>
@@ -189,10 +201,29 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
   removeLoop: (id) =>
     set((s) => {
       const next = s.loops.filter((l) => l.id !== id);
+      const activeRemoved = s.activeLoopId === id;
+      const nextActive = activeRemoved ? next[0]?.id ?? null : s.activeLoopId;
+      if (next.length === 0) {
+        return {
+          loops: next,
+          activeLoopId: null,
+          loopPlaybackEnabled: false,
+          viewportMode: "follow",
+        };
+      }
+      if (!activeRemoved) {
+        return { loops: next, activeLoopId: nextActive };
+      }
+      const naLoop = nextActive
+        ? next.find((l) => l.id === nextActive)
+        : undefined;
+      const playback = Boolean(naLoop && naLoop.end > naLoop.start);
       return {
         loops: next,
-        activeLoopId:
-          s.activeLoopId === id ? next[0]?.id ?? null : s.activeLoopId,
+        activeLoopId: nextActive,
+        loopPlaybackEnabled: playback,
+        loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
+        ...(!playback ? { viewportMode: "follow" as const } : {}),
       };
     }),
   nudgeLoopEdge: (edge, deltaSec) => {
