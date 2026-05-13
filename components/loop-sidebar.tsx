@@ -48,7 +48,6 @@ export const LoopSidebar = memo(function LoopSidebar(props: Props) {
         </p>
         <Button
           type="button"
-          size="sm"
           variant="outline"
           className="h-8 px-3 text-xs"
           onClick={onAddLoop}
