@@ -246,16 +246,14 @@ export const MobilePhraseSelectorTrigger = memo(
     const { activePhraseName, sheetOpen, onOpen } = props;
     return (
       <div className="text-center">
-        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-stone-500">
-          Active phrase
-        </p>
         <button
           type="button"
           onClick={onOpen}
           aria-expanded={sheetOpen}
           aria-haspopup="dialog"
+          aria-label={`Current phrase: ${activePhraseName}. Tap to choose a phrase.`}
           className={cn(
-            "mx-auto mt-2 flex min-h-[48px] max-w-[min(100%,22rem)] items-center justify-center gap-2 rounded-full border px-4 py-2.5",
+            "mx-auto flex min-h-[48px] max-w-[min(100%,22rem)] items-center justify-center gap-2 rounded-full border px-4 py-2.5",
             "border-violet-500/25 bg-gradient-to-b from-stone-900/90 to-stone-950/95 text-stone-100 shadow-inner shadow-black/20",
             "transition-colors active:scale-[0.99] touch-manipulation",
             "hover:border-violet-400/40 hover:bg-stone-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/70",

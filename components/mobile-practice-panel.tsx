@@ -157,17 +157,26 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
           onValueChange={(v) => onTempoSlider(v[0] ?? 100)}
         />
         <div className="flex justify-center gap-2">
-          {([50, 75, 100] as const).map((pct) => (
-            <Button
-              key={pct}
-              type="button"
-              variant="ghost"
-              className="h-10 min-w-[44px] px-2 text-xs text-stone-400 hover:bg-stone-800/70 hover:text-stone-100"
-              onClick={() => onTempoSlider(pct)}
-            >
-              {pct}%
-            </Button>
-          ))}
+          {([50, 75, 100] as const).map((pct) => {
+            const isPreset = roundedTempo === pct;
+            return (
+              <Button
+                key={pct}
+                type="button"
+                variant="ghost"
+                className={cn(
+                  "h-10 min-w-[44px] border px-2 text-xs font-medium tabular-nums transition-colors",
+                  isPreset
+                    ? "border-violet-500/45 bg-violet-500/14 text-violet-100 shadow-sm shadow-violet-950/20 hover:bg-violet-500/20 hover:text-violet-50"
+                    : "border-stone-700/50 bg-stone-900/40 text-stone-200 hover:border-stone-600/70 hover:bg-stone-800/80 hover:text-stone-50",
+                )}
+                aria-pressed={isPreset}
+                onClick={() => onTempoSlider(pct)}
+              >
+                {pct}%
+              </Button>
+            );
+          })}
         </div>
       </div>
     </div>

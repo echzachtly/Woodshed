@@ -217,32 +217,16 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
                 {projectName}
               </p>
             </div>
-            <div className="flex w-full flex-wrap items-center justify-between gap-2">
-              <Button
-                variant="secondary"
-                type="button"
-                className="h-9 shrink-0 border-stone-700/70 px-3 text-xs text-stone-200/95"
-                disabled={saveDisabled || saveBusy}
-                title={
-                  saveDisabled
-                    ? "Save is disabled for the built-in example. Upload or open your own session to save."
-                    : undefined
-                }
-                onClick={onSaveProject}
-              >
-                {saveBusy ? (savePendingLabel ?? "Saving…") : saveLabel}
-              </Button>
-              <div className="flex shrink-0 items-center gap-2.5">
-                {isDemoProject ? (
-                  <span
-                    className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
-                    title="Built-in example — use Sessions to open your own saved work"
-                  >
-                    Demo
-                  </span>
-                ) : null}
-                <HeaderAccount />
-              </div>
+            <div className="flex w-full flex-wrap items-center justify-end gap-2.5">
+              {isDemoProject ? (
+                <span
+                  className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
+                  title="Built-in example — use Sessions to open your own saved work"
+                >
+                  Demo
+                </span>
+              ) : null}
+              <HeaderAccount compactMobile />
             </div>
           </>
         ) : (
