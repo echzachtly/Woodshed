@@ -36,6 +36,9 @@ export type MobilePracticeControlsProps = {
   onResetTempoTo100: () => void;
 };
 
+/**
+ * Mobile stack: Repeat → Play / time → Tempo → current phrase (above waveform in page order).
+ */
 export const MobilePracticeControls = memo(function MobilePracticeControls(
   props: MobilePracticeControlsProps,
 ) {
@@ -64,7 +67,7 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
         <button
           type="button"
           className={cn(
-            "rounded-full border px-3.5 py-1.5 text-[11px] font-medium transition-colors",
+            "min-h-[44px] rounded-full border px-4 py-2 text-[11px] font-medium transition-colors",
             loopPlaybackEnabled
               ? "border-violet-500/45 bg-violet-500/12 text-violet-100"
               : "border-stone-700/60 bg-stone-900/50 text-stone-400",
@@ -80,18 +83,6 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
         >
           {loopPlaybackEnabled ? "Repeat phrase: ON" : "Repeat phrase: OFF"}
         </button>
-      </div>
-
-      <div className="text-center">
-        <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-stone-500">
-          Active phrase
-        </p>
-        <p
-          className="mt-1 line-clamp-2 text-xl font-semibold leading-snug text-stone-50"
-          title={activePhraseName}
-        >
-          {activePhraseName}
-        </p>
       </div>
 
       <div className="flex flex-col items-center gap-2">
@@ -129,7 +120,7 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
           </span>
           <button
             type="button"
-            className="rounded-md border border-transparent px-2 py-1 font-mono text-xs tabular-nums text-stone-200 hover:border-stone-700/60 hover:bg-stone-800/60"
+            className="min-h-[40px] min-w-[44px] rounded-md border border-transparent px-2 py-1 font-mono text-xs tabular-nums text-stone-200 hover:border-stone-700/60 hover:bg-stone-800/60"
             title="Reset tempo to 100%"
             aria-label="Reset tempo to 100%"
             onClick={onResetTempoTo100}
@@ -152,13 +143,25 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
               key={pct}
               type="button"
               variant="ghost"
-              className="h-8 min-w-[3.25rem] px-2 text-xs text-stone-400 hover:bg-stone-800/70 hover:text-stone-100"
+              className="h-10 min-w-[44px] px-2 text-xs text-stone-400 hover:bg-stone-800/70 hover:text-stone-100"
               onClick={() => onTempoSlider(pct)}
             >
               {pct}%
             </Button>
           ))}
         </div>
+      </div>
+
+      <div className="border-t border-stone-800/35 pt-3 text-center">
+        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-stone-500">
+          Active phrase
+        </p>
+        <p
+          className="mt-1 line-clamp-2 text-lg font-semibold leading-snug text-stone-50"
+          title={activePhraseName}
+        >
+          {activePhraseName}
+        </p>
       </div>
     </div>
   );
@@ -231,7 +234,9 @@ export const MobilePhraseNav = memo(function MobilePhraseNav(
                 <span
                   className={cn(
                     "h-2 w-2 shrink-0 rounded-full transition-colors",
-                    active ? "bg-violet-400 shadow-[0_0_0_3px_rgba(167,139,250,0.12)]" : "bg-stone-600",
+                    active
+                      ? "bg-violet-400 shadow-[0_0_0_3px_rgba(167,139,250,0.12)]"
+                      : "bg-stone-600",
                   )}
                   aria-hidden
                 />
@@ -239,7 +244,9 @@ export const MobilePhraseNav = memo(function MobilePhraseNav(
                   <span
                     className={cn(
                       "block truncate text-[15px] leading-snug",
-                      active ? "font-semibold text-stone-50" : "font-medium text-stone-200",
+                      active
+                        ? "font-semibold text-stone-50"
+                        : "font-medium text-stone-200",
                     )}
                   >
                     {loop.name}

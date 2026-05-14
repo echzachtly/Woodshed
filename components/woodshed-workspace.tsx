@@ -20,6 +20,7 @@ import {
 import { LoopSidebar } from "@/components/loop-sidebar";
 import { MiniMap } from "@/components/mini-map";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { installWaveformPinchZoom } from "@/lib/waveform-mobile-pinch";
 import type { VisibleWindow } from "@/lib/waveform-manager";
 import {
   applyPlaybackTempo,
@@ -203,6 +204,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const releasePanRef = useRef<(() => void) | null>(null);
   /** WaveSurfer mount effect reads this ref — keep in sync with `isMobilePractice`. */
   const mobilePracticeModeRef = useRef(false);
+
+  /** Releases two-finger pinch zoom on mobile waveform. */
+  const pinchZoomReleaseRef = useRef<(() => void) | null>(null);
 
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<RegionsHandle | null>(null);
@@ -553,6 +557,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           panDom.scrollContainer,
           () => mobilePracticeModeRef.current,
         );
+        pinchZoomReleaseRef.current = installWaveformPinchZoom(ws, {
+          isMobilePractice: () => mobilePracticeModeRef.current,
+          getStore: () => useWoodshedStore.getState(),
+        });
       }
 
       let tightLoopRaf = 0;
@@ -741,6 +749,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       /** Release the pan handler before destroying WaveSurfer (DOM listeners attach to the scrollContainer). */
       releasePanRef.current?.();
       releasePanRef.current = null;
+      pinchZoomReleaseRef.current?.();
+      pinchZoomReleaseRef.current = null;
       wavesurferRef.current?.destroy();
       wavesurferRef.current = null;
     };
@@ -751,6 +761,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (!ws) return;
     ws.zoom(minPxPerSec);
   }, [minPxPerSec]);
+
+  /** Mobile: allow drag along the wave to seek; desktop keeps click-only seek without drag-to-seek. */
+  useEffect(() => {
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+    ws.setOptions({ dragToSeek: isMobilePractice });
+  }, [isMobilePractice]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;
@@ -799,13 +816,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     /**
      * Main waveform shows ONLY the currently active loop.
      *
-     * Why: the waveform is the practice surface, not a map. Multiple overlapping
-     * loop overlays compete with the music for attention. The mini-map continues
-     * to render every saved loop so users still see the full song structure;
-     * the main view stays focused on the phrase being practiced or edited.
-     *
-     * State is untouched — inactive loops still live in `loops`, in the sidebar,
-     * and in the mini-map. Selecting a different loop swaps which one is drawn here.
+     * Inactive loops stay in store, desktop mini-map, and mobile PHRASES list.
+     * Selecting a different loop swaps which one is drawn here.
      */
     const renderedLoop = activeLoopId
       ? loops.find((l) => l.id === activeLoopId) ?? null
@@ -820,8 +832,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const signature = renderedLoop
       ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|${
           renderedLoop.id === editableLoopId ? "edit" : "lock"
-        }`
-      : "empty";
+        }|m:${isMobilePractice ? "1" : "0"}`
+      : `empty|m:${isMobilePractice ? "1" : "0"}`;
     if (signature === loopsSignature.current) {
       return;
     }
@@ -862,11 +874,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             ? "woodshed-region-active"
             : "woodshed-region-locked";
         el.classList.add(className);
+        if (isMobilePractice) {
+          el.style.pointerEvents = "none";
+        } else {
+          el.style.pointerEvents = "";
+        }
       });
 
-      region.on("click", () => {
-        useWoodshedStore.getState().selectLoop(loop.id);
-      });
+      if (!isMobilePractice) {
+        region.on("click", () => {
+          useWoodshedStore.getState().selectLoop(loop.id);
+        });
+      }
 
       region.on("update-end", (payload: unknown) => {
         const updated = typeof payload === "object" && payload && "region" in (payload as object)
@@ -1413,7 +1432,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           className={cn(
             "min-h-0 min-w-0 flex-1",
             isMobilePractice
-              ? "grid h-full w-full grid-rows-[auto_minmax(0,10rem)_auto_minmax(0,1fr)]"
+              ? "grid h-full w-full grid-rows-[auto_minmax(11rem,34vh)_minmax(0,1fr)]"
               : "flex flex-col",
           )}
         >
@@ -1470,7 +1489,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             className={cn(
               "relative flex min-h-0 min-w-0 flex-[1_1_62%] flex-col overflow-hidden border-b border-stone-900 bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] px-5 py-4",
               isMobilePractice &&
-                "pointer-events-none max-h-40 min-h-0 flex-none px-3 py-2",
+                "min-h-0 flex-none touch-manipulation border-b-stone-800/80 px-3 py-2 [touch-action:pan-x]",
             )}
           >
             <div
@@ -1479,38 +1498,35 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               className="relative z-0 h-full w-full min-h-0"
             />
           </div>
-          <MiniMap
-            peaks={decodedPeaks}
-            duration={duration}
-            loops={loops}
-            activeLoopId={activeLoopId}
-            viewport={viewport}
-            currentTime={currentTime}
-            readOnly={isMobilePractice}
-            className={cn(
-              isMobilePractice &&
-                "max-[768px]:border-t-stone-800/30 max-[768px]:bg-[#090807]/95 max-[768px]:py-1.5 max-[768px]:opacity-[0.92]",
-            )}
-            onNavigate={(seconds) => {
-              const st = useWoodshedStore.getState();
-              if (st.viewportMode === "loop-focused") {
-                st.setViewportMode("follow");
-              }
-              wavesurferRef.current?.setTime(seconds);
-            }}
-            onViewportPanToRatio={(ratio) => {
-              const st = useWoodshedStore.getState();
-              if (st.viewportMode === "loop-focused") {
-                st.setViewportMode("follow");
-              }
-              setWaveNormalizedScroll(wavesurferRef.current, ratio);
-            }}
-          />
           {isMobilePractice ? (
             <MobilePhraseNav
               loops={loops}
               activeLoopId={activeLoopId}
               onSelectPhrase={handleMobilePhraseSelect}
+            />
+          ) : null}
+          {!isMobilePractice ? (
+            <MiniMap
+              peaks={decodedPeaks}
+              duration={duration}
+              loops={loops}
+              activeLoopId={activeLoopId}
+              viewport={viewport}
+              currentTime={currentTime}
+              onNavigate={(seconds) => {
+                const st = useWoodshedStore.getState();
+                if (st.viewportMode === "loop-focused") {
+                  st.setViewportMode("follow");
+                }
+                wavesurferRef.current?.setTime(seconds);
+              }}
+              onViewportPanToRatio={(ratio) => {
+                const st = useWoodshedStore.getState();
+                if (st.viewportMode === "loop-focused") {
+                  st.setViewportMode("follow");
+                }
+                setWaveNormalizedScroll(wavesurferRef.current, ratio);
+              }}
             />
           ) : null}
         </div>
