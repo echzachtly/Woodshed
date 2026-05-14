@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, Upload, X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -13,8 +13,8 @@ import {
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
+import { ProjectPickerList } from "@/components/project-picker-list";
 import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
-import { cloudSessionPickerValue } from "@/lib/cloud-projects/constants";
 import type { StoredProjectMeta } from "@/lib/project-db";
 import { cn } from "@/lib/utils";
 
@@ -182,169 +182,17 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
               </div>
             </div>
 
-            <ul
-              className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-y-contain px-3 pb-4 [-webkit-overflow-scrolling:touch]"
-              role="list"
-            >
-              <li className="px-1 pt-1">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-500">
-                  Example
-                </p>
-              </li>
-              <li className="min-w-0">
-                <button
-                  type="button"
-                  onClick={() => handlePick(demoProjectId)}
-                  className={cn(
-                    "flex min-h-[48px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors touch-manipulation",
-                    sessionSelectValue === demoProjectId
-                      ? "bg-violet-500/[0.12] text-stone-50"
-                      : "text-stone-300 hover:bg-stone-800/50 active:bg-stone-800/70",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold leading-none",
-                      sessionSelectValue === demoProjectId
-                        ? "border-violet-400/45 bg-violet-500/20 text-violet-100"
-                        : "border-stone-700/40 bg-stone-800/50",
-                    )}
-                    aria-hidden
-                  >
-                    {sessionSelectValue === demoProjectId ? "✓" : (
-                      <span className="h-1.5 w-1.5 rounded-full bg-stone-500" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-medium leading-snug">
-                    {demoProjectLabel}
-                  </span>
-                </button>
-              </li>
-
-              <li className="px-1 pt-2">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-500">
-                  Open
-                </p>
-              </li>
-              <li className="min-w-0">
-                <button
-                  type="button"
-                  onClick={handleOpenAudioFile}
-                  className={cn(
-                    "flex min-h-[48px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors touch-manipulation",
-                    "text-stone-400 hover:bg-stone-800/50 hover:text-stone-200 active:bg-stone-800/70",
-                  )}
-                  aria-label="Open audio file from your device"
-                >
-                  <span
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-stone-700/40 bg-stone-800/40 text-stone-500"
-                    aria-hidden
-                  >
-                    <Upload className="h-3 w-3" strokeWidth={2} />
-                  </span>
-                  <span className="min-w-0 flex-1 text-[14px] font-medium leading-snug">
-                    Open audio file…
-                  </span>
-                </button>
-              </li>
-
-              <li className="px-1 pt-2">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-500">
-                  This device
-                </p>
-              </li>
-              {userProjects.length === 0 ? (
-                <li className="px-2 py-2 text-[13px] text-stone-500">
-                  No saved projects on this device yet.
-                </li>
-              ) : (
-                userProjects.map((p) => {
-                  const active = sessionSelectValue === p.id;
-                  return (
-                    <li key={p.id} className="min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => handlePick(p.id)}
-                        className={cn(
-                          "flex min-h-[48px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors touch-manipulation",
-                          active
-                            ? "bg-violet-500/[0.12] text-stone-50"
-                            : "text-stone-300 hover:bg-stone-800/50 active:bg-stone-800/70",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold leading-none",
-                            active
-                              ? "border-violet-400/45 bg-violet-500/20 text-violet-100"
-                              : "border-stone-700/40 bg-stone-800/50",
-                          )}
-                          aria-hidden
-                        >
-                          {active ? "✓" : (
-                            <span className="h-1.5 w-1.5 rounded-full bg-stone-500" />
-                          )}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-[14px] font-medium leading-snug">
-                          {p.name ?? p.id}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })
-              )}
-
-              {showCloudSessions ? (
-                <>
-                  <li className="px-1 pt-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-500">
-                      Cloud
-                    </p>
-                  </li>
-                  {cloudProjects.length === 0 ? (
-                    <li className="px-2 py-2 text-[13px] text-stone-500">
-                      No cloud projects yet.
-                    </li>
-                  ) : (
-                    cloudProjects.map((p) => {
-                      const v = cloudSessionPickerValue(p.id);
-                      const active = sessionSelectValue === v;
-                      return (
-                        <li key={p.id} className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => handlePick(v)}
-                            className={cn(
-                              "flex min-h-[48px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors touch-manipulation",
-                              active
-                                ? "bg-violet-500/[0.12] text-stone-50"
-                                : "text-stone-300 hover:bg-stone-800/50 active:bg-stone-800/70",
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold leading-none",
-                                active
-                                  ? "border-violet-400/45 bg-violet-500/20 text-violet-100"
-                                  : "border-stone-700/40 bg-stone-800/50",
-                              )}
-                              aria-hidden
-                            >
-                              {active ? "✓" : (
-                                <span className="h-1.5 w-1.5 rounded-full bg-stone-500" />
-                              )}
-                            </span>
-                            <span className="min-w-0 flex-1 truncate text-[14px] font-medium leading-snug">
-                              {p.name ?? p.id}
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })
-                  )}
-                </>
-              ) : null}
-            </ul>
+            <ProjectPickerList
+              sessionSelectValue={sessionSelectValue}
+              demoProjectId={demoProjectId}
+              demoProjectLabel={demoProjectLabel}
+              userProjects={userProjects}
+              cloudProjects={cloudProjects}
+              showCloudSessions={showCloudSessions}
+              onPickProject={handlePick}
+              onOpenAudioFile={handleOpenAudioFile}
+              listClassName="min-h-0 flex-1 px-3 pb-4"
+            />
           </motion.div>
         </>
       ) : null}
@@ -358,19 +206,30 @@ export type MobileProjectSelectorTriggerProps = {
   isDemoProject: boolean;
   sheetOpen: boolean;
   onOpen: () => void;
+  /** Widen or restyle the pill (e.g. desktop). */
+  triggerClassName?: string;
+  /** Desktop dropdown uses `menu`; mobile sheet uses `dialog`. */
+  ariaHasPopup?: "dialog" | "menu";
 };
 
 /** Tappable pill — smaller / subtler than the phrase selector. */
 export const MobileProjectSelectorTrigger = memo(
   function MobileProjectSelectorTrigger(props: MobileProjectSelectorTriggerProps) {
-    const { projectName, isDemoProject, sheetOpen, onOpen } = props;
+    const {
+      projectName,
+      isDemoProject,
+      sheetOpen,
+      onOpen,
+      triggerClassName,
+      ariaHasPopup = "dialog",
+    } = props;
     return (
       <div className="text-center">
         <button
           type="button"
           onClick={onOpen}
           aria-expanded={sheetOpen}
-          aria-haspopup="dialog"
+          aria-haspopup={ariaHasPopup}
           aria-label={`Current project: ${projectName}. Tap to switch project.`}
           className={cn(
             "mx-auto flex min-h-[44px] w-full max-w-[min(100%,22rem)] items-center gap-2 rounded-xl border px-3.5 py-2",
@@ -379,6 +238,7 @@ export const MobileProjectSelectorTrigger = memo(
             "transition-[transform,border-color,background-color] active:scale-[0.99] touch-manipulation",
             "hover:border-stone-500/50 hover:bg-stone-900/90 hover:text-stone-100",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/70",
+            triggerClassName,
           )}
         >
           <span className="min-w-0 flex-1 truncate text-left text-[13px] font-medium leading-snug tracking-tight">

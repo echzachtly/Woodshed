@@ -238,19 +238,28 @@ export type MobilePhraseSelectorTriggerProps = {
   activePhraseName: string;
   sheetOpen: boolean;
   onOpen: () => void;
+  triggerClassName?: string;
+  /** Desktop dropdown uses `menu`; mobile sheet uses `dialog`. */
+  ariaHasPopup?: "dialog" | "menu";
 };
 
 /** Tappable pill showing current phrase; opens bottom sheet. */
 export const MobilePhraseSelectorTrigger = memo(
   function MobilePhraseSelectorTrigger(props: MobilePhraseSelectorTriggerProps) {
-    const { activePhraseName, sheetOpen, onOpen } = props;
+    const {
+      activePhraseName,
+      sheetOpen,
+      onOpen,
+      triggerClassName,
+      ariaHasPopup = "dialog",
+    } = props;
     return (
       <div className="text-center">
         <button
           type="button"
           onClick={onOpen}
           aria-expanded={sheetOpen}
-          aria-haspopup="dialog"
+          aria-haspopup={ariaHasPopup}
           aria-label={`Current phrase: ${activePhraseName}. Tap to choose a phrase.`}
           className={cn(
             "mx-auto flex min-h-[52px] w-full max-w-[min(100%,24rem)] items-center justify-center gap-2.5 rounded-2xl border-2 px-5 py-3",
@@ -259,6 +268,7 @@ export const MobilePhraseSelectorTrigger = memo(
             "transition-[transform,box-shadow,border-color] active:scale-[0.99] touch-manipulation",
             "hover:border-violet-300/55 hover:shadow-[0_10px_32px_rgba(76,29,149,0.18)]",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/80",
+            triggerClassName,
           )}
         >
           <span className="truncate text-[16px] font-semibold leading-snug tracking-tight">

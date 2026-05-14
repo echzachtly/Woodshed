@@ -12,7 +12,7 @@ import {
 
 import WaveSurfer from "wavesurfer.js";
 
-import { AppHeader, WorkspaceTransportBar } from "@/components/transport-bar";
+import { DesktopPracticeStack } from "@/components/desktop-practice-stack";
 import { useAuth } from "@/components/auth-provider";
 import {
   MobilePracticeControls,
@@ -59,6 +59,8 @@ import {
   resolveDemoAudioBlob,
   type PendingDemoHydration,
 } from "@/lib/demo-project";
+import { formatFilenameAsProjectName } from "@/lib/format-upload-project-name";
+import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
 import { cn } from "@/lib/utils";
@@ -74,6 +76,8 @@ import { useWoodshedStore } from "@/store/woodshed-store";
 /** iOS Safari: combine MIME tokens with extensions so common files stay selectable. */
 const MOBILE_AUDIO_INPUT_ACCEPT =
   "audio/*,.mp3,.m4a,.aac,.wav,.flac,.aiff,.aif";
+
+const DESKTOP_PHRASES_PANEL_KEY = "woodshed-desktop-phrases-panel";
 
 const ALLOWED_AUDIO_EXTENSIONS = new Set([
   "mp3",
@@ -188,6 +192,29 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const saveStatusClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+
+  const [phrasesPanelOpen, setPhrasesPanelOpen] = useState(false);
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(DESKTOP_PHRASES_PANEL_KEY) === "1") {
+        setPhrasesPanelOpen(true);
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  const togglePhrasesPanel = useCallback(() => {
+    setPhrasesPanelOpen((v) => {
+      const next = !v;
+      try {
+        sessionStorage.setItem(DESKTOP_PHRASES_PANEL_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -979,13 +1006,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     try {
       const url = URL.createObjectURL(blob);
       await ws.load(url);
-      const prettyName =
+      const displayName =
         blob instanceof File
-          ? blob.name.replace(/\.[^/.]+$/, "")
+          ? formatFilenameAsProjectName(blob.name)
           : "Woodshed session";
-      useWoodshedStore
-        .getState()
-        .setProjectMeta(nanoid(), prettyName ?? "Untitled session");
+      useWoodshedStore.getState().setProjectMeta(nanoid(), displayName);
       await listProjects().then(setProjectsList);
     } catch {
       devError("Failed to load waveform");
@@ -1225,19 +1250,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         return;
       }
 
+      if (isKeyboardFocusInTextField(event.target)) {
+        return;
+      }
+
       const ws = wavesurferRef.current;
       const modifier = event.shiftKey;
       const stepping = modifier ? 0.05 : 0.75;
       if (event.repeat) return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
-        return;
-      }
 
       switch (event.key) {
         case " ": {
@@ -1271,14 +1291,21 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           useWoodshedStore.getState().bumpTempo(-0.05);
           break;
         }
+        case "a":
+        case "A": {
+          if (event.metaKey || event.ctrlKey || event.altKey) break;
+          event.preventDefault();
+          useWoodshedStore.getState().addLoopCandidate();
+          break;
+        }
         case "r":
         case "R": {
           event.preventDefault();
-          if (!ws || !activeLoopId) break;
-          const rail = loops.find((l) => l.id === activeLoopId);
-          if (!rail) break;
-          ws.setTime(rail.start);
-          void ws.play();
+          const st = useWoodshedStore.getState();
+          const rail = st.loops.find((l) => l.id === st.activeLoopId);
+          const canEnable = Boolean(rail && rail.end > rail.start);
+          if (!st.loopPlaybackEnabled && !canEnable) break;
+          st.setLoopPlaybackEnabled(!st.loopPlaybackEnabled);
           break;
         }
         case "PageDown": {
@@ -1313,7 +1340,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           break;
       }
     },
-    [activeLoopId, duration, loops],
+    [duration],
   );
 
   const userProjectsSelectable = useMemo(
@@ -1414,8 +1441,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       aria-label="Woodshed workspace"
     >
       {!isMobilePractice ? (
-        <AppHeader
+        <DesktopPracticeStack
           projectName={projectName}
+          isDemoProject={isDemoProject}
           sessionSelectValue={sessionSelectValue}
           demoProjectId={DEMO_PROJECT_ID}
           demoProjectLabel={demoPickerTitle}
@@ -1424,8 +1452,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           showCloudSessions={Boolean(
             isSupabaseConfigured() && supabase && cloudSessionUserId,
           )}
-          isDemoProject={isDemoProject}
-          sessionNameReadOnly={isDemoProject}
+          onRestoreProject={handleRestoreProject}
+          onOpenAudioFile={() => fileInputRef.current?.click()}
+          activePhraseName={activePhraseName}
+          loops={loops}
+          activeLoopId={activeLoopId}
+          onSelectPhrase={handleMobilePhraseSelect}
+          onCreateNewPhrase={() => {
+            useWoodshedStore.getState().addLoopCandidate();
+          }}
+          phrasesPanelOpen={phrasesPanelOpen}
+          onTogglePhrasesPanel={togglePhrasesPanel}
           saveDisabled={isDemoProject}
           saveLabel={
             isSupabaseConfigured() && supabase && cloudSessionUserId
@@ -1450,12 +1487,32 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             onChange: handleMobileFileInputChange,
             "aria-hidden": true,
           }}
-          onRenameProject={(name) =>
-            useWoodshedStore.getState().setProjectMeta(projectId ?? null, name)
-          }
-          onOpenFileClick={() => fileInputRef.current?.click()}
           onSaveProject={() => void persistSession()}
-          onRestoreProject={handleRestoreProject}
+          duration={duration}
+          currentTime={currentTime}
+          isPlaying={isPlaying}
+          loopPlaybackEnabled={loopPlaybackEnabled}
+          canEnableLoopPlayback={Boolean(
+            activeLoop && activeLoop.end > activeLoop.start,
+          )}
+          tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+          onTogglePlay={handleTransportTogglePlay}
+          onRestartLoop={() => {
+            const ws = wavesurferRef.current;
+            if (!ws || !activeLoopId) return;
+            const rail = loops.find((l) => l.id === activeLoopId);
+            if (!rail) return;
+            ws.setTime(rail.start);
+            void ws.play();
+          }}
+          onResetZoomFullSong={handleResetZoomFullSong}
+          onToggleLoopPlayback={() =>
+            useWoodshedStore
+              .getState()
+              .setLoopPlaybackEnabled(!loopPlaybackEnabled)
+          }
+          onTempoSlider={handleTransportTempo}
+          formatTime={(t) => formatTime(t)}
         />
       ) : null}
 
@@ -1509,37 +1566,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               onSelectPhrase={handleMobilePhraseSelect}
             />
           ) : null}
-          <WorkspaceTransportBar
-            className={cn(isMobilePractice && "hidden")}
-            duration={duration}
-            currentTime={currentTime}
-            isPlaying={isPlaying}
-            loopPlaybackEnabled={loopPlaybackEnabled}
-            canEnableLoopPlayback={Boolean(
-              activeLoop && activeLoop.end > activeLoop.start,
-            )}
-            tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-            onTogglePlay={handleTransportTogglePlay}
-            onRestartLoop={() => {
-              const ws = wavesurferRef.current;
-              if (!ws || !activeLoopId) return;
-              const rail = loops.find((l) => l.id === activeLoopId);
-              if (!rail) return;
-              ws.setTime(rail.start);
-              void ws.play();
-            }}
-            onResetZoomFullSong={handleResetZoomFullSong}
-            onToggleLoopPlayback={() =>
-              useWoodshedStore
-                .getState()
-                .setLoopPlaybackEnabled(!loopPlaybackEnabled)
-            }
-            onTempoSlider={handleTransportTempo}
-            formatTime={(t) => formatTime(t)}
-          />
           <div
             className={cn(
               "relative flex min-h-0 min-w-0 flex-[1_1_62%] flex-col overflow-hidden border-b border-stone-900 bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] px-5 py-4",
+              !isMobilePractice && "pt-9 pb-6 sm:pt-10 sm:pb-7",
               isMobilePractice &&
                 "min-h-0 flex-none touch-manipulation border-b-stone-800/80 px-3 py-2 [touch-action:pan-x]",
             )}
@@ -1572,22 +1602,24 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           ) : null}
         </div>
 
-        <div className="max-[768px]:hidden min-h-0 min-w-0 xl:shrink-0">
-          <LoopSidebar
-            loops={loops}
-            activeLoopId={activeLoopId}
-            editableLoopId={editableLoopId}
-            onSelectLoop={(id) => useWoodshedStore.getState().selectLoop(id)}
-            onRenameLoop={(id, next) =>
-              useWoodshedStore.getState().renameLoop(id, next)
-            }
-            onAddLoop={() => useWoodshedStore.getState().addLoopCandidate()}
-            onRemoveLoop={(id) => useWoodshedStore.getState().removeLoop(id)}
-            onSetEditable={(id) =>
-              useWoodshedStore.getState().setEditableLoopId(id)
-            }
-          />
-        </div>
+        {phrasesPanelOpen ? (
+          <div className="max-[768px]:hidden min-h-0 min-w-0 xl:w-[320px] xl:shrink-0 xl:transition-[width] xl:duration-200 xl:ease-out">
+            <LoopSidebar
+              loops={loops}
+              activeLoopId={activeLoopId}
+              editableLoopId={editableLoopId}
+              onSelectLoop={(id) => useWoodshedStore.getState().selectLoop(id)}
+              onRenameLoop={(id, next) =>
+                useWoodshedStore.getState().renameLoop(id, next)
+              }
+              onAddLoop={() => useWoodshedStore.getState().addLoopCandidate()}
+              onRemoveLoop={(id) => useWoodshedStore.getState().removeLoop(id)}
+              onSetEditable={(id) =>
+                useWoodshedStore.getState().setEditableLoopId(id)
+              }
+            />
+          </div>
+        ) : null}
       </div>
     </section>
   );
