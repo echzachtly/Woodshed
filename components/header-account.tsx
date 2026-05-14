@@ -40,8 +40,18 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
     };
   }, [menuOpen, compactMobile, closeMenu]);
 
+  /** Mobile: always surface auth affordance; login page explains if env is missing. */
   if (!configured) {
-    return null;
+    if (!compactMobile) return null;
+    return (
+      <Button
+        asChild
+        variant="outline"
+        className="h-9 shrink-0 rounded-full border-stone-600/50 bg-stone-900/60 px-3 text-xs font-medium text-stone-200 hover:bg-stone-800 hover:text-stone-50"
+      >
+        <Link href="/login">Sign in</Link>
+      </Button>
+    );
   }
 
   if (authLoading) {
@@ -64,7 +74,7 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
             type="button"
             variant="secondary"
             size="icon"
-            className="h-9 w-9 shrink-0 rounded-full border-stone-700/70 bg-stone-900/80 text-stone-200 hover:bg-stone-800 hover:text-stone-50"
+            className="h-9 w-9 shrink-0 rounded-full border-violet-500/25 bg-stone-900/90 text-violet-100 shadow-sm shadow-black/20 hover:border-violet-400/40 hover:bg-stone-800 hover:text-white"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
             aria-label="Account menu"
@@ -145,8 +155,8 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
     return (
       <Button
         asChild
-        variant="secondary"
-        className="h-9 shrink-0 rounded-full border-stone-700/70 bg-stone-900/80 px-3 text-xs font-medium text-stone-200 hover:bg-stone-800 hover:text-stone-50"
+        variant="outline"
+        className="h-9 shrink-0 rounded-full border-violet-500/30 bg-stone-900/70 px-3 text-xs font-medium text-violet-100 hover:border-violet-400/45 hover:bg-stone-800 hover:text-white"
       >
         <Link href="/login">Sign in</Link>
       </Button>

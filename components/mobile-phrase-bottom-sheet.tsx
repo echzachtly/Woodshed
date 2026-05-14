@@ -253,18 +253,20 @@ export const MobilePhraseSelectorTrigger = memo(
           aria-haspopup="dialog"
           aria-label={`Current phrase: ${activePhraseName}. Tap to choose a phrase.`}
           className={cn(
-            "mx-auto flex min-h-[48px] max-w-[min(100%,22rem)] items-center justify-center gap-2 rounded-full border px-4 py-2.5",
-            "border-violet-500/25 bg-gradient-to-b from-stone-900/90 to-stone-950/95 text-stone-100 shadow-inner shadow-black/20",
-            "transition-colors active:scale-[0.99] touch-manipulation",
-            "hover:border-violet-400/40 hover:bg-stone-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/70",
+            "mx-auto flex min-h-[52px] w-full max-w-[min(100%,24rem)] items-center justify-center gap-2.5 rounded-2xl border-2 px-5 py-3",
+            "border-violet-400/45 bg-gradient-to-b from-violet-950/35 via-stone-900/95 to-stone-950 text-stone-50",
+            "shadow-[0_8px_28px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)]",
+            "transition-[transform,box-shadow,border-color] active:scale-[0.99] touch-manipulation",
+            "hover:border-violet-300/55 hover:shadow-[0_10px_32px_rgba(76,29,149,0.18)]",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/80",
           )}
         >
-          <span className="truncate text-[15px] font-semibold tracking-tight">
+          <span className="truncate text-[16px] font-semibold leading-snug tracking-tight">
             {activePhraseName}
           </span>
           <ChevronDown
             className={cn(
-              "h-4 w-4 shrink-0 text-violet-300/80 transition-transform",
+              "h-5 w-5 shrink-0 text-violet-200 transition-transform",
               sheetOpen && "rotate-180",
             )}
             aria-hidden

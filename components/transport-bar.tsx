@@ -206,27 +206,29 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
                 onRestoreProject={onRestoreProject}
                 selectClassName="max-w-none w-full"
               />
-              <Label className="sr-only" htmlFor="mobile-session-title">
-                Current project
-              </Label>
-              <p
-                id="mobile-session-title"
-                className="min-w-0 truncate text-center text-base font-semibold leading-snug text-stone-100"
-                title={projectName}
-              >
-                {projectName}
-              </p>
-            </div>
-            <div className="flex w-full flex-wrap items-center justify-end gap-2.5">
-              {isDemoProject ? (
-                <span
-                  className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
-                  title="Built-in example — use Sessions to open your own saved work"
+              <div className="flex w-full min-w-0 items-start gap-2">
+                <Label className="sr-only" htmlFor="mobile-session-title">
+                  Current project
+                </Label>
+                <p
+                  id="mobile-session-title"
+                  className="min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug text-stone-100"
+                  title={projectName}
                 >
-                  Demo
-                </span>
-              ) : null}
-              <HeaderAccount compactMobile />
+                  {projectName}
+                </p>
+                <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                  {isDemoProject ? (
+                    <span
+                      className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
+                      title="Built-in example — use Sessions to open your own saved work"
+                    >
+                      Demo
+                    </span>
+                  ) : null}
+                  <HeaderAccount compactMobile />
+                </div>
+              </div>
             </div>
           </>
         ) : (

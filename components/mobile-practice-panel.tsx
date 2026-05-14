@@ -37,7 +37,7 @@ export type MobilePracticeControlsProps = {
 };
 
 /**
- * Mobile stack: phrase selector → Repeat → Play / time → Tempo.
+ * Mobile stack: phrase selector → playback (repeat + play) → Tempo.
  * Phrase list lives in a bottom sheet (opened from the selector).
  */
 export const MobilePracticeControls = memo(function MobilePracticeControls(
@@ -65,7 +65,7 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
 
   return (
     <div
-      className="shrink-0 space-y-4 border-b border-stone-800/45 bg-gradient-to-b from-stone-950 to-[#0a0908] px-4 py-4 min-[769px]:hidden"
+      className="shrink-0 space-y-5 border-b border-stone-800/45 bg-gradient-to-b from-stone-950 to-[#0a0908] px-4 py-4 min-[769px]:hidden"
       aria-label="Mobile practice controls"
     >
       <MobilePhraseSelectorTrigger
@@ -82,16 +82,21 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
         onSelectPhrase={onSelectPhrase}
       />
 
-      <div className="flex justify-center">
+      <div className="flex flex-col items-center gap-2.5">
         <button
           type="button"
           className={cn(
-            "min-h-[44px] rounded-full border px-4 py-2 text-[11px] font-medium transition-colors",
+            "min-h-[44px] rounded-full border px-3.5 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] transition-colors touch-manipulation",
             loopPlaybackEnabled
-              ? "border-violet-500/45 bg-violet-500/12 text-violet-100"
-              : "border-stone-700/60 bg-stone-900/50 text-stone-400",
+              ? "border-violet-500/30 bg-violet-500/10 text-violet-200/95"
+              : "border-stone-700/35 bg-stone-900/40 text-stone-500",
           )}
           aria-pressed={loopPlaybackEnabled}
+          aria-label={
+            loopPlaybackEnabled
+              ? "Repeat phrase on — tap to turn off"
+              : "Repeat phrase off — tap to turn on"
+          }
           disabled={!loopPlaybackEnabled && !canEnableLoopPlayback}
           title={
             loopPlaybackEnabled
@@ -100,11 +105,8 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
           }
           onClick={onToggleLoopPlayback}
         >
-          {loopPlaybackEnabled ? "Repeat phrase: ON" : "Repeat phrase: OFF"}
+          {loopPlaybackEnabled ? "Repeat · on" : "Repeat · off"}
         </button>
-      </div>
-
-      <div className="flex flex-col items-center gap-2">
         <Button
           variant={isPlaying ? "secondary" : "default"}
           type="button"
@@ -168,7 +170,7 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
                   "h-10 min-w-[44px] border px-2 text-xs font-medium tabular-nums transition-colors",
                   isPreset
                     ? "border-violet-500/45 bg-violet-500/14 text-violet-100 shadow-sm shadow-violet-950/20 hover:bg-violet-500/20 hover:text-violet-50"
-                    : "border-stone-700/50 bg-stone-900/40 text-stone-200 hover:border-stone-600/70 hover:bg-stone-800/80 hover:text-stone-50",
+                    : "border-stone-800/35 bg-stone-950/40 text-stone-400 hover:border-stone-700/45 hover:bg-stone-900/70 hover:text-stone-200",
                 )}
                 aria-pressed={isPreset}
                 onClick={() => onTempoSlider(pct)}
