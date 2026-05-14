@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
 } from "react";
 
 import WaveSurfer from "wavesurfer.js";
@@ -991,6 +992,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     }
   }, [primeWaveformCaches]);
 
+  const handleMobileFileInputChange = useCallback(
+    async (evt: ChangeEvent<HTMLInputElement>) => {
+      const input = evt.target;
+      const file = input.files?.item(0);
+      if (!file) {
+        input.value = "";
+        return;
+      }
+      if (!isAllowedUploadedAudioFile(file)) {
+        devWarn(
+          "Please choose an audio file (MP3, M4A, AAC, WAV, FLAC, AIFF, …).",
+        );
+        input.value = "";
+        return;
+      }
+      await ingestFile(file);
+      input.value = "";
+    },
+    [ingestFile],
+  );
+
   const hydrateProject = useCallback(
     async (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => {
       const ws = wavesurferRef.current;
@@ -1336,6 +1358,53 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     handleTransportTempo(100);
   }, [handleTransportTempo]);
 
+  const handleRestoreProject = useCallback(
+    async (id: string) => {
+      if (id === DEMO_PROJECT_ID) {
+        const ok = await loadBuiltInDemoProject();
+        if (ok) await listProjects().then(setProjectsList);
+        return;
+      }
+      const cloudId = parseCloudSessionPickerValue(id);
+      if (cloudId && supabase) {
+        try {
+          const loaded = await loadCloudProject(supabase, cloudId);
+          await hydrateProject(
+            {
+              id: loaded.id,
+              name: loaded.name,
+              loops: loaded.loops,
+              activeLoopId: loaded.activeLoopId,
+              updatedAt: loaded.updatedAt,
+            },
+            { audioBlob: loaded.audioBlob },
+          );
+          await refreshCloudProjects();
+        } catch (e) {
+          const msg =
+            e instanceof Error
+              ? e.message
+              : "Could not open this cloud project.";
+          console.error("[Woodshed cloud] loadCloudProject failed:", e);
+          setSaveStatusMessage(`Cloud open failed: ${msg}`);
+          setSaveStatusTone("error");
+          scheduleSaveStatusClear(12_000);
+        }
+        return;
+      }
+      const project = await loadDexieProject(id);
+      if (!project) return;
+      await hydrateProject(project);
+    },
+    [
+      hydrateProject,
+      loadBuiltInDemoProject,
+      refreshCloudProjects,
+      scheduleSaveStatusClear,
+      supabase,
+    ],
+  );
+
   return (
     <section
       ref={sectionRef}
@@ -1344,102 +1413,51 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       onKeyDown={handleKeyboard}
       aria-label="Woodshed workspace"
     >
-      <AppHeader
-        projectName={projectName}
-        sessionSelectValue={sessionSelectValue}
-        demoProjectId={DEMO_PROJECT_ID}
-        demoProjectLabel={demoPickerTitle}
-        userProjects={userProjectsSelectable}
-        cloudProjects={cloudProjects}
-        showCloudSessions={Boolean(
-          isSupabaseConfigured() && supabase && cloudSessionUserId,
-        )}
-        isDemoProject={isDemoProject}
-        sessionNameReadOnly={isDemoProject}
-        saveDisabled={isDemoProject}
-        saveLabel={
-          isSupabaseConfigured() && supabase && cloudSessionUserId
-            ? "Save to cloud"
-            : "Save"
-        }
-        saveBusy={saveBusy}
-        savePendingLabel={savePendingLabel}
-        saveStatusMessage={saveStatusMessage}
-        saveStatusTone={saveStatusTone}
-        cloudListError={cloudListError}
-        devExportLoopsJson={
-          process.env.NODE_ENV === "development"
-            ? handleDevExportLoopsJson
-            : undefined
-        }
-        mobilePracticeLayout={isMobilePractice}
-        hiddenFileProps={{
-          ref: fileInputRef,
-          type: "file",
-          accept: MOBILE_AUDIO_INPUT_ACCEPT,
-          hidden: true,
-          onChange: async (evt) => {
-            const input = evt.target as HTMLInputElement;
-            const file = input.files?.item(0);
-            if (!file) {
-              input.value = "";
-              return;
-            }
-            if (!isAllowedUploadedAudioFile(file)) {
-              devWarn(
-                "Please choose an audio file (MP3, M4A, AAC, WAV, FLAC, AIFF, …).",
-              );
-              input.value = "";
-              return;
-            }
-            await ingestFile(file);
-            input.value = "";
-          },
-          "aria-hidden": true,
-        }}
-        onRenameProject={(name) =>
-          useWoodshedStore.getState().setProjectMeta(projectId ?? null, name)
-        }
-        onOpenFileClick={() => fileInputRef.current?.click()}
-        onSaveProject={() => void persistSession()}
-        onRestoreProject={async (id) => {
-          if (id === DEMO_PROJECT_ID) {
-            const ok = await loadBuiltInDemoProject();
-            if (ok) await listProjects().then(setProjectsList);
-            return;
+      {!isMobilePractice ? (
+        <AppHeader
+          projectName={projectName}
+          sessionSelectValue={sessionSelectValue}
+          demoProjectId={DEMO_PROJECT_ID}
+          demoProjectLabel={demoPickerTitle}
+          userProjects={userProjectsSelectable}
+          cloudProjects={cloudProjects}
+          showCloudSessions={Boolean(
+            isSupabaseConfigured() && supabase && cloudSessionUserId,
+          )}
+          isDemoProject={isDemoProject}
+          sessionNameReadOnly={isDemoProject}
+          saveDisabled={isDemoProject}
+          saveLabel={
+            isSupabaseConfigured() && supabase && cloudSessionUserId
+              ? "Save to cloud"
+              : "Save"
           }
-          const cloudId = parseCloudSessionPickerValue(id);
-          if (cloudId && supabase) {
-            try {
-              const loaded = await loadCloudProject(supabase, cloudId);
-              await hydrateProject(
-                {
-                  id: loaded.id,
-                  name: loaded.name,
-                  loops: loaded.loops,
-                  activeLoopId: loaded.activeLoopId,
-                  updatedAt: loaded.updatedAt,
-                },
-                { audioBlob: loaded.audioBlob },
-              );
-              await refreshCloudProjects();
-            } catch (e) {
-              const msg =
-                e instanceof Error
-                  ? e.message
-                  : "Could not open this cloud project.";
-              console.error("[Woodshed cloud] loadCloudProject failed:", e);
-              setSaveStatusMessage(`Cloud open failed: ${msg}`);
-              setSaveStatusTone("error");
-              scheduleSaveStatusClear(12_000);
-            }
-            return;
+          saveBusy={saveBusy}
+          savePendingLabel={savePendingLabel}
+          saveStatusMessage={saveStatusMessage}
+          saveStatusTone={saveStatusTone}
+          cloudListError={cloudListError}
+          devExportLoopsJson={
+            process.env.NODE_ENV === "development"
+              ? handleDevExportLoopsJson
+              : undefined
           }
-          const project = await loadDexieProject(id);
-          if (!project) return;
-          await hydrateProject(project);
-        }}
-      />
+          hiddenFileProps={{
+            ref: fileInputRef,
+            type: "file",
+            accept: MOBILE_AUDIO_INPUT_ACCEPT,
+            hidden: true,
+            onChange: handleMobileFileInputChange,
+            "aria-hidden": true,
+          }}
+          onRenameProject={(name) =>
+            useWoodshedStore.getState().setProjectMeta(projectId ?? null, name)
+          }
+          onOpenFileClick={() => fileInputRef.current?.click()}
+          onSaveProject={() => void persistSession()}
+          onRestoreProject={handleRestoreProject}
+        />
+      ) : null}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
         <div
@@ -1452,6 +1470,23 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         >
           {isMobilePractice ? (
             <MobilePracticeControls
+              fileInputRef={fileInputRef}
+              fileAccept={MOBILE_AUDIO_INPUT_ACCEPT}
+              onFileInputChange={handleMobileFileInputChange}
+              projectName={projectName}
+              isDemoProject={isDemoProject}
+              sessionSelectValue={sessionSelectValue}
+              demoProjectId={DEMO_PROJECT_ID}
+              demoProjectLabel={demoPickerTitle}
+              userProjects={userProjectsSelectable}
+              cloudProjects={cloudProjects}
+              showCloudSessions={Boolean(
+                isSupabaseConfigured() && supabase && cloudSessionUserId,
+              )}
+              onRestoreProject={handleRestoreProject}
+              saveStatusMessage={saveStatusMessage}
+              saveStatusTone={saveStatusTone}
+              cloudListError={cloudListError}
               activePhraseName={activePhraseName}
               isPlaying={isPlaying}
               duration={duration}

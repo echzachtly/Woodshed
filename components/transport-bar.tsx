@@ -13,9 +13,9 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { HeaderAccount } from "@/components/header-account";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
-import { Label } from "@/components/ui/label";
 import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
 import { cloudSessionPickerValue } from "@/lib/cloud-projects/constants";
 import type { StoredProjectMeta } from "@/lib/project-db";
@@ -137,11 +137,6 @@ export type AppHeaderProps = {
    * Only pass when `process.env.NODE_ENV === "development"`.
    */
   devExportLoopsJson?: () => void;
-  /**
-   * Mobile practice mode: stack controls, hide upload, show title as read-only text
-   * (desktop editor header is unchanged when false / omitted).
-   */
-  mobilePracticeLayout?: boolean;
   onRenameProject: (name: string) => void;
   onOpenFileClick: () => void;
   onSaveProject: () => void;
@@ -170,7 +165,6 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
     saveStatusTone = "neutral",
     cloudListError,
     devExportLoopsJson,
-    mobilePracticeLayout = false,
     onRenameProject,
     onOpenFileClick,
     onSaveProject,
@@ -183,62 +177,15 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
       <div
         className={cn(
           "mx-auto flex max-w-[1600px] flex-col gap-3",
-          mobilePracticeLayout
-            ? "gap-3"
-            : "lg:flex-row lg:items-center lg:justify-between lg:gap-6",
+          "lg:flex-row lg:items-center lg:justify-between lg:gap-6",
         )}
       >
-        {mobilePracticeLayout ? (
-          <>
-            <input {...hiddenFileProps} />
-            <div className="flex w-full min-w-0 flex-col gap-2">
-              <Label className="sr-only" htmlFor="mobile-session-picker">
-                Session
-              </Label>
-              <SessionPicker
-                id="mobile-session-picker"
-                sessionSelectValue={sessionSelectValue}
-                demoProjectId={demoProjectId}
-                demoProjectLabel={demoProjectLabel}
-                userProjects={userProjects}
-                cloudProjects={cloudProjects}
-                showCloudSessions={showCloudSessions}
-                onRestoreProject={onRestoreProject}
-                selectClassName="max-w-none w-full"
-              />
-              <div className="flex w-full min-w-0 items-start gap-2">
-                <Label className="sr-only" htmlFor="mobile-session-title">
-                  Current project
-                </Label>
-                <p
-                  id="mobile-session-title"
-                  className="min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug text-stone-100"
-                  title={projectName}
-                >
-                  {projectName}
-                </p>
-                <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                  {isDemoProject ? (
-                    <span
-                      className="rounded-md border border-violet-400/22 bg-violet-500/8 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-violet-200/75"
-                      title="Built-in example — use Sessions to open your own saved work"
-                    >
-                      Demo
-                    </span>
-                  ) : null}
-                  <HeaderAccount compactMobile />
-                </div>
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-2.5",
-                "lg:max-w-[min(100%,22rem)]",
-              )}
-            >
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2.5",
+            "lg:max-w-[min(100%,22rem)]",
+          )}
+        >
               <Label className="sr-only" htmlFor="session-name">
                 Session name
               </Label>
@@ -316,8 +263,6 @@ export const AppHeader = memo(function AppHeader(props: AppHeaderProps) {
               ) : null}
               <HeaderAccount />
             </div>
-          </>
-        )}
       </div>
 
       {cloudListError ? (

@@ -1,14 +1,21 @@
 "use client";
 
 import { Pause, Play } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useState, type ChangeEvent, type RefObject } from "react";
 
+import { HeaderAccount } from "@/components/header-account";
 import {
   MobilePhraseBottomSheet,
   MobilePhraseSelectorTrigger,
 } from "@/components/mobile-phrase-bottom-sheet";
+import {
+  MobileProjectBottomSheet,
+  MobileProjectSelectorTrigger,
+} from "@/components/mobile-project-practice";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
+import type { StoredProjectMeta } from "@/lib/project-db";
 import { cn } from "@/lib/utils";
 import type { PracticeLoop } from "@/lib/loop-engine";
 
@@ -20,6 +27,21 @@ function formatCompactTime(seconds: number): string {
 }
 
 export type MobilePracticeControlsProps = {
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  fileAccept: string;
+  onFileInputChange: (e: ChangeEvent<HTMLInputElement>) => void | Promise<void>;
+  projectName: string;
+  isDemoProject: boolean;
+  sessionSelectValue: string;
+  demoProjectId: string;
+  demoProjectLabel: string;
+  userProjects: StoredProjectMeta[];
+  cloudProjects: CloudProjectSummary[];
+  showCloudSessions: boolean;
+  onRestoreProject: (id: string) => void | Promise<void>;
+  saveStatusMessage?: string | null;
+  saveStatusTone?: "neutral" | "progress" | "success" | "error";
+  cloudListError?: string | null;
   activePhraseName: string;
   isPlaying: boolean;
   duration: number;
@@ -37,13 +59,28 @@ export type MobilePracticeControlsProps = {
 };
 
 /**
- * Mobile stack: phrase selector → playback (repeat + play) → Tempo.
- * Phrase list lives in a bottom sheet (opened from the selector).
+ * Mobile practice stack: project → phrase → playback → tempo.
+ * Phrase list: bottom sheet. Project list: separate bottom sheet.
  */
 export const MobilePracticeControls = memo(function MobilePracticeControls(
   props: MobilePracticeControlsProps,
 ) {
   const {
+    fileInputRef,
+    fileAccept,
+    onFileInputChange,
+    projectName,
+    isDemoProject,
+    sessionSelectValue,
+    demoProjectId,
+    demoProjectLabel,
+    userProjects,
+    cloudProjects,
+    showCloudSessions,
+    onRestoreProject,
+    saveStatusMessage,
+    saveStatusTone = "neutral",
+    cloudListError,
     activePhraseName,
     isPlaying,
     duration,
@@ -61,17 +98,89 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
   } = props;
 
   const [phraseSheetOpen, setPhraseSheetOpen] = useState(false);
+  const [projectSheetOpen, setProjectSheetOpen] = useState(false);
   const roundedTempo = Math.round(tempoPercent);
+
+  const openProjectSheet = () => {
+    setPhraseSheetOpen(false);
+    setProjectSheetOpen(true);
+  };
+
+  const openPhraseSheet = () => {
+    setProjectSheetOpen(false);
+    setPhraseSheetOpen(true);
+  };
 
   return (
     <div
-      className="shrink-0 space-y-5 border-b border-stone-800/45 bg-gradient-to-b from-stone-950 to-[#0a0908] px-4 py-4 min-[769px]:hidden"
+      className="shrink-0 space-y-4 border-b border-stone-800/45 bg-gradient-to-b from-stone-950 to-[#0a0908] px-4 py-3 min-[769px]:hidden"
       aria-label="Mobile practice controls"
     >
-      <MobilePhraseSelectorTrigger
-        activePhraseName={activePhraseName}
-        sheetOpen={phraseSheetOpen}
-        onOpen={() => setPhraseSheetOpen(true)}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={fileAccept}
+        className="sr-only"
+        aria-hidden
+        onChange={onFileInputChange}
+      />
+      {cloudListError ? (
+        <div
+          className="rounded-md border border-amber-800/40 bg-amber-950/30 px-2.5 py-1.5 text-[10px] leading-snug text-amber-100/95"
+          role="alert"
+        >
+          Cloud list: {cloudListError}
+        </div>
+      ) : null}
+
+      {saveStatusMessage ? (
+        <div
+          className={cn(
+            "rounded-md border px-2.5 py-1.5 text-[10px] leading-snug",
+            saveStatusTone === "error" &&
+              "border-red-800/50 bg-red-950/35 text-red-100/95",
+            saveStatusTone === "success" &&
+              "border-emerald-800/40 bg-emerald-950/30 text-emerald-100/90",
+            saveStatusTone === "progress" &&
+              "border-violet-800/40 bg-violet-950/30 text-violet-100/90",
+            saveStatusTone === "neutral" &&
+              "border-stone-700/50 bg-stone-900/45 text-stone-300/95",
+          )}
+          role={saveStatusTone === "error" ? "alert" : "status"}
+        >
+          {saveStatusMessage}
+        </div>
+      ) : null}
+
+      <div className="flex w-full max-w-[min(100%,24rem)] mx-auto items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <MobileProjectSelectorTrigger
+            projectName={projectName}
+            isDemoProject={isDemoProject}
+            sheetOpen={projectSheetOpen}
+            onOpen={openProjectSheet}
+          />
+          <MobilePhraseSelectorTrigger
+            activePhraseName={activePhraseName}
+            sheetOpen={phraseSheetOpen}
+            onOpen={openPhraseSheet}
+          />
+        </div>
+        <div className="shrink-0 pt-0.5">
+          <HeaderAccount compactMobile />
+        </div>
+      </div>
+
+      <MobileProjectBottomSheet
+        isOpen={projectSheetOpen}
+        onClose={() => setProjectSheetOpen(false)}
+        sessionSelectValue={sessionSelectValue}
+        demoProjectId={demoProjectId}
+        demoProjectLabel={demoProjectLabel}
+        userProjects={userProjects}
+        cloudProjects={cloudProjects}
+        showCloudSessions={showCloudSessions}
+        onSelectProject={onRestoreProject}
       />
 
       <MobilePhraseBottomSheet
