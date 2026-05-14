@@ -8,8 +8,16 @@ import {
 } from "@/lib/loop-engine";
 import { nanoid } from "@/lib/id";
 
-/** Waveform viewport: follow playhead vs loop-focused zoom once (until user pans/zooms). */
-export type ViewportMode = "follow" | "loop-focused";
+/**
+ * Waveform viewport intent (WaveSurfer `autoScroll` / `autoCenter` still follow
+ * `loopPlaybackEnabled` separately — see workspace effect).
+ *
+ * - `follow` — default; playhead can stay centered when not repeating a phrase.
+ * - `phrase-focus` — viewport was just fitted to the active phrase (zoom + scroll).
+ * - `manual` — user panned/zoomed after a phrase-focus fit while repeat is on;
+ *   playhead follow stays off until the next explicit phrase refit.
+ */
+export type ViewportMode = "follow" | "phrase-focus" | "manual";
 
 export type WoodshedState = {
   projectId: string | null;
@@ -28,15 +36,11 @@ export type WoodshedState = {
   editableLoopId: string | null;
   isPlaying: boolean;
   currentTime: number;
-  /** When true, playback repeats the selected loop; waveform auto-follow is off. */
+  /** When true, playback repeats the active phrase; waveform playhead auto-follow is off. */
   loopPlaybackEnabled: boolean;
   /** Main waveform zoom (WaveSurfer minPxPerSec) */
   minPxPerSec: number;
   hoverTime: number | null;
-  /**
-   * `follow` — WaveSurfer keeps the play position in view during playback.
-   * `loop-focused` — viewport was fitted to the active loop once; user pan/zoom returns to follow layout.
-   */
   viewportMode: ViewportMode;
   /**
    * Incremented whenever the user explicitly selects a practice loop (including re-selecting the same one)
@@ -58,6 +62,11 @@ type WoodshedActions = {
   setMinPxPerSec: (v: number) => void;
   setHoverTime: (t: number | null) => void;
   setViewportMode: (mode: ViewportMode) => void;
+  /**
+   * Call when the user pans, zooms, or navigates the viewport after an automatic
+   * phrase fit — leaves `phrase-focus` for `manual` (repeat on) or `follow`.
+   */
+  exitPhraseFitAfterUserNavigation: () => void;
   upsertLoops: (loops: PracticeLoop[]) => void;
   addLoopCandidate: () => void;
   addLoopAround: (
@@ -136,6 +145,16 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set({ minPxPerSec: Math.max(4, Math.min(1500, minPxPerSec)) }),
   setHoverTime: (hoverTime) => set({ hoverTime }),
   setViewportMode: (viewportMode) => set({ viewportMode }),
+  exitPhraseFitAfterUserNavigation: () =>
+    set((s) =>
+      s.viewportMode === "phrase-focus"
+        ? {
+            viewportMode: s.loopPlaybackEnabled
+              ? ("manual" as const)
+              : ("follow" as const),
+          }
+        : {},
+    ),
   /**
    * Bulk-load (project hydration). Loaded loops are always treated as "saved" —
    * any in-flight edit/draft state is cleared so the user enters practice mode.

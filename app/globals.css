@@ -9,15 +9,6 @@
   --border: #292524;
   --wave: #4a4540;
   --wave-bright: #b8b0a8;
-  /**
-   * Loop overlays — kept intentionally light so the waveform stays the hero.
-   * Active is a calm violet wash; inactive is a barely-there slate.
-   * Edge definition is carried by `.woodshed-region-active` shadows below.
-   */
-  --loop-active: rgba(210, 198, 255, 0.30);
-  --loop-active-border: rgba(233, 213, 255, 0.82);
-  --loop-inactive: rgba(100, 116, 139, 0.12);
-  --loop-inactive-border: rgba(148, 163, 184, 0.30);
 }
 
 @theme inline {
@@ -77,13 +68,13 @@ body {
 }
 
 /**
- * Loop region tiers (class names set in `woodshed-workspace.tsx`):
+ * Phrase region tiers (class names set in `woodshed-workspace.tsx`):
  *
  *   .woodshed-region-locked   — saved, not currently selected. Inherits the
  *                               waveform's grab cursor so drags pan through it.
  *   .woodshed-region-active   — saved practice phrase that's currently selected.
  *                               Clearly framed, no drag handles, no glow.
- *   .woodshed-region-editing  — draft loop or saved loop in Edit mode.
+ *   .woodshed-region-editing  — draft phrase or saved phrase in Edit mode.
  *                               Brighter edges, soft glow, drag/resize handles.
  *
  * The waveform stays the hero — emphasis is carried by edges, not heavy fills.

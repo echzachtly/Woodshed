@@ -67,7 +67,7 @@ export const LoopSidebar = memo(function LoopSidebar(props: Props) {
           Phrases
         </p>
         <p className="text-[10px] leading-snug text-stone-500">
-          Select a phrase to focus and loop it.
+          Select a phrase to practice; use Repeat phrase to stay inside it.
         </p>
       </header>
 

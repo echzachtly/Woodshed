@@ -354,7 +354,7 @@ export type WorkspaceTransportBarProps = {
   currentTime: number;
   isPlaying: boolean;
   loopPlaybackEnabled: boolean;
-  /** True when the active loop has a valid span — required to turn loop playback on. */
+  /** True when the active phrase has a valid span — required to turn Repeat phrase on. */
   canEnableLoopPlayback: boolean;
   tempoPercent: number;
   onTogglePlay: () => void;
@@ -369,11 +369,11 @@ export type WorkspaceTransportBarProps = {
 
 /**
  * Three-zone transport bar:
- *   LEFT   — phrase / practice context (Loop Playback toggle, Loop start, Full song)
+ *   LEFT   — phrase / practice context (Repeat phrase, Phrase start, Full song)
  *   CENTER — playback focus (large Play/Pause + live time readout)
  *   RIGHT  — tempo control (label, slider, percentage with click/dblclick edit)
  *
- * Stop was removed intentionally — Woodshed is loop-centric, Play/Pause is enough.
+ * Stop was removed intentionally — practice is phrase-centric; Play/Pause is enough.
  * The three columns use an equal `1fr/auto/1fr` grid so the Play button stays
  * visually centered regardless of the content in the side groups.
  */
@@ -428,19 +428,19 @@ export const WorkspaceTransportBar = memo(function WorkspaceTransportBar(
             className={cn(
               transportGhost,
               "min-w-0 max-w-[12.5rem] sm:max-w-none",
-              /** Loop Playback is the most important left-zone control — keep its prominence. */
+              /** Repeat phrase is the most important left-zone control — keep its prominence. */
               loopPlaybackEnabled && "border-violet-500/40 bg-violet-500/10 text-violet-100/95",
             )}
             aria-pressed={loopPlaybackEnabled}
             aria-label={
               loopPlaybackEnabled
-                ? "Turn loop playback off — play the full song"
-                : "Turn loop playback on — repeat the selected section"
+                ? "Turn off repeat phrase — play the full song"
+                : "Turn on repeat phrase — stay inside the selected phrase"
             }
             disabled={!loopPlaybackEnabled && !canEnableLoopPlayback}
             onClick={onToggleLoopPlayback}
           >
-            {loopPlaybackEnabled ? "Loop Playback: ON" : "Loop Playback: OFF"}
+            {loopPlaybackEnabled ? "Repeat phrase: ON" : "Repeat phrase: OFF"}
           </Button>
           <Separator
             orientation="vertical"
@@ -450,10 +450,10 @@ export const WorkspaceTransportBar = memo(function WorkspaceTransportBar(
             variant="ghost"
             type="button"
             className={transportGhost}
-            aria-label="Restart active loop (R)"
+            aria-label="Jump to phrase start (R)"
             onClick={onRestartLoop}
           >
-            <RotateCcw className="h-3.5 w-3.5" /> Loop start
+            <RotateCcw className="h-3.5 w-3.5" /> Phrase start
           </Button>
           <Button
             variant="ghost"

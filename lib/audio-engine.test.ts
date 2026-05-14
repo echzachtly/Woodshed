@@ -8,7 +8,7 @@ import {
 describe("audio-engine.loopSeekDecision", () => {
   const rail = { enabled: true, start: 2, end: 5 };
 
-  it("warp to start inside loop playback window", () => {
+  it("warp to start inside repeat phrase window", () => {
     expect(loopSeekDecision(1.2, rail, 0.1).warpTo).toBeCloseTo(rail.start, 6);
   });
 

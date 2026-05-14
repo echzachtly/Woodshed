@@ -35,7 +35,7 @@ import {
   saveProject as saveDexieProject,
   type StoredProjectMeta,
 } from "@/lib/project-db";
-import { devError, devWarn } from "@/lib/dev-log";
+import { devError, devLog, devWarn } from "@/lib/dev-log";
 import { isSupabaseConfigured } from "@/lib/env/public";
 import {
   listCloudProjectSummaries,
@@ -66,6 +66,8 @@ import {
   PLAYHEAD_UI_TIME_MS,
   readPlaybackSeconds,
 } from "@/lib/playhead-sync";
+import { useShallow } from "zustand/react/shallow";
+
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 /** iOS Safari: combine MIME tokens with extensions so common files stay selectable. */
@@ -195,7 +197,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const demoInitialLoadDoneRef = useRef(false);
   const loopsSignature = useRef<string>("");
   const wheelBound = useRef(false);
-  /** Ignore scroll events briefly after programmatic phrase fit (loop-focused viewport). */
+  /** Ignore scroll events briefly after programmatic phrase-fit (avoids fighting `phrase-focus`). */
   const suppressViewportScrollUntilRef = useRef(0);
   /** Stops tight loop RAF from the effect cleanup (see mount IIFE). */
   const cancelPlaybackLoopRef = useRef<(() => void) | null>(null);
@@ -220,17 +222,33 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     durationRatio: 1,
   });
 
-  const projectName = useWoodshedStore((s) => s.projectName);
-  const projectId = useWoodshedStore((s) => s.projectId);
-  const loops = useWoodshedStore((s) => s.loops);
-  const activeLoopId = useWoodshedStore((s) => s.activeLoopId);
-  const editableLoopId = useWoodshedStore((s) => s.editableLoopId);
-  const duration = useWoodshedStore((s) => s.duration);
-  const minPxPerSec = useWoodshedStore((s) => s.minPxPerSec);
-  const loopPlaybackEnabled = useWoodshedStore((s) => s.loopPlaybackEnabled);
-  const loopFocusTick = useWoodshedStore((s) => s.loopFocusTick);
-  const isPlaying = useWoodshedStore((s) => s.isPlaying);
-  const currentTime = useWoodshedStore((s) => s.currentTime);
+  const {
+    projectName,
+    projectId,
+    loops,
+    activeLoopId,
+    editableLoopId,
+    duration,
+    minPxPerSec,
+    loopPlaybackEnabled,
+    loopFocusTick,
+    isPlaying,
+    currentTime,
+  } = useWoodshedStore(
+    useShallow((s) => ({
+      projectName: s.projectName,
+      projectId: s.projectId,
+      loops: s.loops,
+      activeLoopId: s.activeLoopId,
+      editableLoopId: s.editableLoopId,
+      duration: s.duration,
+      minPxPerSec: s.minPxPerSec,
+      loopPlaybackEnabled: s.loopPlaybackEnabled,
+      loopFocusTick: s.loopFocusTick,
+      isPlaying: s.isPlaying,
+      currentTime: s.currentTime,
+    })),
+  );
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === activeLoopId),
     [activeLoopId, loops],
@@ -249,10 +267,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, []);
 
   /**
-   * Frame the active loop inside the waveform viewport with balanced padding.
+   * Frame the active phrase inside the waveform viewport with balanced padding.
    *
-   * Loop occupies ~86% of the visible width, leaving ~7% breathing room on
-   * each side so the active phrase reads as *framed* rather than cropped.
+   * The phrase occupies ~86% of the visible width, leaving ~7% breathing room on
+   * each side so it reads as *framed* rather than cropped.
    *
    * The crucial detail: WaveSurfer's wrapper sits behind a horizontal gutter
    * (see `lib/waveform-gutter.ts`), so the wrapper's origin is at
@@ -266,7 +284,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
    *
    * Returns false if layout isn't ready (caller falls back to follow mode).
    */
-  const applyPhraseFitToLoop = useCallback((loop: PracticeLoop) => {
+  const fitActivePhraseInViewport = useCallback((loop: PracticeLoop) => {
     const ws = wavesurferRef.current;
     if (!ws) return false;
     const span = loop.end - loop.start;
@@ -277,14 +295,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return false;
 
-    /** Target loop width as a fraction of the viewport — controls how much breathing room. */
-    const LOOP_VIEWPORT_RATIO = 0.86;
-    const targetWidth = clientWidth * LOOP_VIEWPORT_RATIO;
+    /** Target phrase width as a fraction of the viewport — controls how much breathing room. */
+    const PHRASE_VIEWPORT_RATIO = 0.86;
+    const targetWidth = clientWidth * PHRASE_VIEWPORT_RATIO;
     const nextPxPerSec = Math.max(4, Math.min(1500, targetWidth / span));
     useWoodshedStore.getState().setMinPxPerSec(nextPxPerSec);
     ws.zoom(nextPxPerSec);
 
-    /** Center the loop midpoint in the visible viewport, accounting for the gutter. */
+    /** Center the phrase midpoint in the visible viewport, accounting for the gutter. */
     const loopMidPx = ((loop.start + loop.end) / 2) * nextPxPerSec;
     const desiredScroll =
       WAVEFORM_HORIZONTAL_GUTTER_PX + loopMidPx - clientWidth / 2;
@@ -307,7 +325,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const ws = wavesurferRef.current;
     if (!ws) return;
     const st = useWoodshedStore.getState();
-    if (st.viewportMode === "loop-focused") {
+    /** Full song is an explicit zoom reset — always leave phrase-focus for follow (matches prior behavior). */
+    if (st.viewportMode === "phrase-focus") {
       st.setViewportMode("follow");
     }
     const d = ws.getDuration();
@@ -470,8 +489,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       typeof window === "undefined"
         ? 50
         : useWoodshedStore.getState().minPxPerSec;
-    const snapInit = useWoodshedStore.getState();
-    const initialAutoScroll = !snapInit.loopPlaybackEnabled;
+    const storeForWsInit = useWoodshedStore.getState();
+    const initialAutoScroll = !storeForWsInit.loopPlaybackEnabled;
 
     void (async () => {
       const host = containerRef.current;
@@ -539,7 +558,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
        *   Direct click-drag inside the waveform is the most tactile way to move
        *   around while practicing.
        *
-       * Gesture priority (see Part 7 of the spec):
+       * Gesture priority:
        *   1. Editable region → regions plugin handles drag/resize (we bail out).
        *   2. Locked/selected region or empty waveform → pan when the pointer
        *      moves past the slop threshold; click without drag still seeks.
@@ -617,9 +636,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               return;
             }
             const st = useWoodshedStore.getState();
-            if (st.viewportMode === "loop-focused") {
-              st.setViewportMode("follow");
-            }
+            st.exitPhraseFitAfterUserNavigation();
           },
           { passive: true },
         );
@@ -782,17 +799,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       return;
     }
     suppressViewportScrollUntilRef.current = performance.now() + 220;
-    if (!applyPhraseFitToLoop(loop)) {
+    if (!fitActivePhraseInViewport(loop)) {
       useWoodshedStore.getState().setViewportMode("follow");
       return;
     }
-    useWoodshedStore.getState().setViewportMode("loop-focused");
-  }, [loopPlaybackEnabled, activeLoopId, loopFocusTick, applyPhraseFitToLoop]);
+    useWoodshedStore.getState().setViewportMode("phrase-focus");
+  }, [loopPlaybackEnabled, activeLoopId, loopFocusTick, fitActivePhraseInViewport]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;
     if (!ws) return;
-    /** While loop playback is on, never auto-scroll the waveform — even after manual pan unlocks loop-focused view. */
+    /** While repeat phrase is on, never auto-scroll the waveform — even after the user leaves phrase-focus. */
     const followPlayback = !loopPlaybackEnabled;
     ws.setOptions({
       autoScroll: followPlayback,
@@ -813,10 +830,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (!ws || !regions) return;
 
     /**
-     * Main waveform shows ONLY the currently active loop.
+     * Main waveform shows only the currently active practice phrase (one region).
      *
-     * Inactive loops stay in store, desktop mini-map, and mobile PHRASES list.
-     * Selecting a different loop swaps which one is drawn here.
+     * Other phrases stay in the store, desktop mini-map, and mobile phrase list.
+     * Selecting a different phrase swaps which one is drawn here.
      */
     const renderedLoop = activeLoopId
       ? loops.find((l) => l.id === activeLoopId) ?? null
@@ -916,9 +933,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           const target = useWoodshedStore.getState();
           if (!wavesurferRef.current) return;
           event.preventDefault();
-          if (target.viewportMode === "loop-focused") {
-            target.setViewportMode("follow");
-          }
+          target.exitPhraseFitAfterUserNavigation();
           const factor = Math.exp(event.deltaY * -0.0015);
           const next = Math.min(
             1500,
@@ -1073,7 +1088,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           !isDemo,
       );
 
-    console.log("[Woodshed save]", {
+    devLog("[Woodshed save]", {
       supabaseConfigured: configured,
       hasSupabaseClient: Boolean(supabase),
       sessionPresent: Boolean(sessionUserId),
@@ -1117,7 +1132,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             audioBlob: audioBlobRef.current,
           },
         );
-        console.log("[Woodshed save] cloud upsert ok", { cloudProjectId: cloudId });
+        devLog("[Woodshed save] cloud upsert ok", { cloudProjectId: cloudId });
         useWoodshedStore
           .getState()
           .setProjectMeta(cloudId, snapshot.projectName);
@@ -1247,14 +1262,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         case "PageDown": {
           event.preventDefault();
           const zs = useWoodshedStore.getState();
-          if (zs.viewportMode === "loop-focused") zs.setViewportMode("follow");
+          zs.exitPhraseFitAfterUserNavigation();
           zs.setMinPxPerSec(zs.minPxPerSec / 1.22);
           break;
         }
         case "PageUp": {
           event.preventDefault();
           const zp = useWoodshedStore.getState();
-          if (zp.viewportMode === "loop-focused") zp.setViewportMode("follow");
+          zp.exitPhraseFitAfterUserNavigation();
           zp.setMinPxPerSec(zp.minPxPerSec * 1.22);
           break;
         }
@@ -1510,16 +1525,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               currentTime={currentTime}
               onNavigate={(seconds) => {
                 const st = useWoodshedStore.getState();
-                if (st.viewportMode === "loop-focused") {
-                  st.setViewportMode("follow");
-                }
+                st.exitPhraseFitAfterUserNavigation();
                 wavesurferRef.current?.setTime(seconds);
               }}
               onViewportPanToRatio={(ratio) => {
                 const st = useWoodshedStore.getState();
-                if (st.viewportMode === "loop-focused") {
-                  st.setViewportMode("follow");
-                }
+                st.exitPhraseFitAfterUserNavigation();
                 setWaveNormalizedScroll(wavesurferRef.current, ratio);
               }}
             />
