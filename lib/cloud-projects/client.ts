@@ -5,7 +5,7 @@ import {
   audioStoragePath,
 } from "@/lib/cloud-projects/constants";
 import { formatSupabaseClientError } from "@/lib/cloud-projects/errors";
-import type { PracticeLoop } from "@/lib/loop-engine";
+import type { PhraseSegment, PracticeLoop } from "@/lib/loop-engine";
 
 export type CloudProjectSummary = {
   id: string;
@@ -29,7 +29,50 @@ type LoopRow = {
   end_sec: number;
   tempo: number;
   sort_index: number;
+  notes?: string | null;
+  segments_json?: unknown;
 };
+
+function parseSegmentsJson(raw: unknown): PhraseSegment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PhraseSegment[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const id = typeof o.id === "string" ? o.id : "";
+    const phraseId = typeof o.phraseId === "string" ? o.phraseId : "";
+    const name = typeof o.name === "string" ? o.name : "Focus region";
+    const startTime =
+      typeof o.startTime === "number" && Number.isFinite(o.startTime)
+        ? o.startTime
+        : 0;
+    const endTime =
+      typeof o.endTime === "number" && Number.isFinite(o.endTime)
+        ? o.endTime
+        : startTime;
+    const notes = typeof o.notes === "string" ? o.notes : "";
+    const createdAt =
+      typeof o.createdAt === "number" && Number.isFinite(o.createdAt)
+        ? o.createdAt
+        : Date.now();
+    const updatedAt =
+      typeof o.updatedAt === "number" && Number.isFinite(o.updatedAt)
+        ? o.updatedAt
+        : createdAt;
+    if (!id || !phraseId) continue;
+    out.push({
+      id,
+      phraseId,
+      name,
+      startTime,
+      endTime,
+      notes,
+      createdAt,
+      updatedAt,
+    });
+  }
+  return out;
+}
 
 function mapLoopRows(rows: LoopRow[]): PracticeLoop[] {
   return [...rows]
@@ -40,6 +83,8 @@ function mapLoopRows(rows: LoopRow[]): PracticeLoop[] {
       start: r.start_sec,
       end: r.end_sec,
       tempo: r.tempo,
+      notes: r.notes ?? "",
+      segments: parseSegmentsJson(r.segments_json),
     }));
 }
 
@@ -146,6 +191,8 @@ export async function upsertCloudProject(
       end_sec: l.end,
       tempo: l.tempo,
       sort_index: i,
+      notes: l.notes ?? "",
+      segments_json: l.segments ?? [],
     }));
     const { error: insLoopErr } = await supabase
       .from("woodshed_project_loops")
@@ -186,7 +233,9 @@ export async function loadCloudProject(
 
   const { data: loopData, error: lErr } = await supabase
     .from("woodshed_project_loops")
-    .select("loop_id,name,start_sec,end_sec,tempo,sort_index")
+    .select(
+      "loop_id,name,start_sec,end_sec,tempo,sort_index,notes,segments_json",
+    )
     .eq("project_id", projectId)
     .order("sort_index", { ascending: true });
 

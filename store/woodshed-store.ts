@@ -1,9 +1,12 @@
 import { create } from "zustand";
 
 import {
+  clampSegmentsToPhraseBounds,
   clampTempo,
   createInitialLoop,
+  createSegmentInPhrase,
   loopFromBounds,
+  type PhraseSegment,
   type PracticeLoop,
 } from "@/lib/loop-engine";
 import { nanoid } from "@/lib/id";
@@ -18,6 +21,9 @@ import { nanoid } from "@/lib/id";
  *   playhead follow stays off until the next explicit phrase refit.
  */
 export type ViewportMode = "follow" | "phrase-focus" | "manual";
+
+/** When repeat is on, loop either the full phrase or a focus region’s range. */
+export type LoopPracticeScope = "phrase" | "practice_region";
 
 export type WoodshedState = {
   projectId: string | null;
@@ -38,6 +44,11 @@ export type WoodshedState = {
   currentTime: number;
   /** When true, playback repeats the active phrase; waveform playhead auto-follow is off. */
   loopPlaybackEnabled: boolean;
+  /**
+   * With repeat on: loop the full phrase, or a focus region’s time range when
+   * scope is `practice_region`.
+   */
+  loopPracticeScope: LoopPracticeScope;
   /** Main waveform zoom (WaveSurfer minPxPerSec) */
   minPxPerSec: number;
   hoverTime: number | null;
@@ -49,6 +60,18 @@ export type WoodshedState = {
   loopFocusTick: number;
   /** True when creating loop from double-click / drag */
   pendingLoopDrag: { start: number; end: number } | null;
+  /** Desktop inspector: selected focus region on the active phrase (if any). */
+  activeSegmentId: string | null;
+  /**
+   * Incremented when transport asks the inspector to expand and focus
+   * focus-region fields.
+   */
+  inspectorFocusRequestId: number;
+  /**
+   * Per phrase, last focus region used for Focus Loop (persists when none is
+   * selected in the inspector).
+   */
+  lastPracticeSegmentIdByPhrase: Record<string, string>;
 };
 
 type WoodshedActions = {
@@ -59,6 +82,12 @@ type WoodshedActions = {
   setPlaying: (flag: boolean) => void;
   setCurrentTime: (t: number) => void;
   setLoopPlaybackEnabled: (flag: boolean) => void;
+  setLoopPracticeScope: (scope: LoopPracticeScope) => void;
+  /**
+   * Advance the transport loop control: Phrase↔Play Through when the active
+   * phrase has no focus regions; Loop Phrase→Focus Loop→Play Through when it does.
+   */
+  cycleLoopPlaybackMode: () => void;
   setMinPxPerSec: (v: number) => void;
   setHoverTime: (t: number | null) => void;
   setViewportMode: (mode: ViewportMode) => void;
@@ -92,6 +121,19 @@ type WoodshedActions = {
     bounds: WoodshedState["pendingLoopDrag"],
   ) => void;
   activeLoopTemps: () => number;
+  setActiveSegmentId: (id: string | null) => void;
+  selectSegment: (phraseId: string, segmentId: string) => void;
+  setLoopNotes: (phraseId: string, notes: string) => void;
+  addSegment: (phraseId: string) => void;
+  updateSegment: (
+    phraseId: string,
+    segmentId: string,
+    patch: Partial<
+      Pick<PhraseSegment, "name" | "startTime" | "endTime" | "notes">
+    >,
+  ) => void;
+  removeSegment: (phraseId: string, segmentId: string) => void;
+  requestInspectorSegmentFieldFocus: () => void;
 };
 
 export type WoodshedStore = WoodshedState & WoodshedActions;
@@ -106,11 +148,15 @@ const initialState: WoodshedState = {
   isPlaying: false,
   currentTime: 0,
   loopPlaybackEnabled: false,
+  loopPracticeScope: "phrase",
   minPxPerSec: 50,
   hoverTime: null,
   viewportMode: "follow",
   loopFocusTick: 0,
   pendingLoopDrag: null,
+  activeSegmentId: null,
+  inspectorFocusRequestId: 0,
+  lastPracticeSegmentIdByPhrase: {},
 };
 
 function clampUi(value: number, lo: number, hi: number) {
@@ -119,7 +165,14 @@ function clampUi(value: number, lo: number, hi: number) {
 
 export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
   ...initialState,
-  resetWorkspace: () => set({ ...initialState }),
+  resetWorkspace: () =>
+    set({
+      ...initialState,
+      activeSegmentId: null,
+      loopPracticeScope: "phrase",
+      inspectorFocusRequestId: 0,
+      lastPracticeSegmentIdByPhrase: {},
+    }),
   bootstrapFromDuration: (duration) => {
     const loop = createInitialLoop(duration);
     set((state) => ({
@@ -129,6 +182,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       /** Bootstrap loops are brand-new — start in draft so the user can refine immediately. */
       editableLoopId: loop.id,
       loopPlaybackEnabled: true,
+      loopPracticeScope: "phrase",
       loopFocusTick: state.loopFocusTick + 1,
     }));
   },
@@ -139,7 +193,49 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
   setLoopPlaybackEnabled: (loopPlaybackEnabled) =>
     set({
       loopPlaybackEnabled,
-      ...(!loopPlaybackEnabled ? { viewportMode: "follow" as const } : {}),
+      ...(!loopPlaybackEnabled
+        ? { viewportMode: "follow" as const, loopPracticeScope: "phrase" as const }
+        : {}),
+    }),
+  setLoopPracticeScope: (loopPracticeScope) => set({ loopPracticeScope }),
+  cycleLoopPlaybackMode: () =>
+    set((s) => {
+      const loop = s.activeLoopId
+        ? s.loops.find((l) => l.id === s.activeLoopId)
+        : undefined;
+      const canEnable = Boolean(loop && loop.end > loop.start);
+      if (!canEnable || !loop) return {};
+
+      const phraseHasFocusRegions = Boolean(loop.segments?.length);
+
+      if (!phraseHasFocusRegions) {
+        if (s.loopPlaybackEnabled) {
+          return {
+            loopPlaybackEnabled: false,
+            viewportMode: "follow" as const,
+            loopPracticeScope: "phrase" as const,
+          };
+        }
+        return {
+          loopPlaybackEnabled: true,
+          loopPracticeScope: "phrase" as const,
+        };
+      }
+
+      if (!s.loopPlaybackEnabled) {
+        return {
+          loopPlaybackEnabled: true,
+          loopPracticeScope: "phrase" as const,
+        };
+      }
+      if (s.loopPracticeScope === "phrase") {
+        return { loopPracticeScope: "practice_region" as const };
+      }
+      return {
+        loopPlaybackEnabled: false,
+        viewportMode: "follow" as const,
+        loopPracticeScope: "phrase" as const,
+      };
     }),
   setMinPxPerSec: (minPxPerSec) =>
     set({ minPxPerSec: Math.max(4, Math.min(1500, minPxPerSec)) }),
@@ -159,7 +255,20 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
    * Bulk-load (project hydration). Loaded loops are always treated as "saved" —
    * any in-flight edit/draft state is cleared so the user enters practice mode.
    */
-  upsertLoops: (loops) => set({ loops, editableLoopId: null }),
+  upsertLoops: (loops) =>
+    set({
+      loops: loops.map((l) => ({
+        ...l,
+        segments: l.segments?.length
+          ? clampSegmentsToPhraseBounds(l.segments, l.start, l.end)
+          : l.segments,
+      })),
+      editableLoopId: null,
+      activeSegmentId: null,
+      loopPracticeScope: "phrase",
+      inspectorFocusRequestId: 0,
+      lastPracticeSegmentIdByPhrase: {},
+    }),
   addLoopCandidate: () => {
     const { duration, loops, activeLoopId } = get();
     if (!duration) return;
@@ -178,6 +287,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       /** Brand-new loop → enter draft so the user can shape it immediately. */
       editableLoopId: created.id,
       loopPlaybackEnabled: true,
+      loopPracticeScope: "phrase",
       loopFocusTick: state.loopFocusTick + 1,
     }));
   },
@@ -202,6 +312,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       /** Brand-new loop → enter draft so the user can shape it immediately. */
       editableLoopId: phrase.id,
       loopPlaybackEnabled: true,
+      loopPracticeScope: "phrase",
       loopFocusTick: s.loopFocusTick + 1,
     }));
     return phrase;
@@ -224,15 +335,27 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
           loopPlaybackEnabled: false,
           viewportMode: "follow",
           loopFocusTick: s.loopFocusTick + 1,
+          activeSegmentId: null,
+          loopPracticeScope: "phrase",
         };
       }
       const loop = s.loops.find((l) => l.id === activeLoopId);
       const playback = Boolean(loop && loop.end > loop.start);
+      const hasRegions = Boolean(loop?.segments?.length);
+      const keepSegment =
+        s.activeSegmentId &&
+        loop?.segments?.some((seg) => seg.id === s.activeSegmentId);
+      const loopPracticeScope =
+        keepSegment && hasRegions
+          ? s.loopPracticeScope
+          : "phrase";
       return {
         activeLoopId,
         editableLoopId: nextEditable,
         loopPlaybackEnabled: playback,
         loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
+        activeSegmentId: keepSegment ? s.activeSegmentId : null,
+        loopPracticeScope,
         ...(!playback ? { viewportMode: "follow" as const } : {}),
       };
     }),
@@ -249,13 +372,28 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     if (e - s < minSpan) e = Math.min(duration, s + minSpan);
 
     set((state) => ({
-      loops: state.loops.map((l) =>
-        l.id === id ? { ...l, start: s, end: e } : l,
-      ),
+      loops: state.loops.map((l) => {
+        if (l.id !== id) return l;
+        const nextSeg =
+          l.segments !== undefined
+            ? clampSegmentsToPhraseBounds(l.segments, s, e)
+            : undefined;
+        return {
+          ...l,
+          start: s,
+          end: e,
+          ...(nextSeg !== undefined ? { segments: nextSeg } : {}),
+        };
+      }),
     }));
   },
   removeLoop: (id) =>
     set((s) => {
+      const pruneLast = (m: Record<string, string>) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      };
       const next = s.loops.filter((l) => l.id !== id);
       const activeRemoved = s.activeLoopId === id;
       /** If the editable loop got removed, exit edit mode. */
@@ -269,10 +407,27 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
           editableLoopId: null,
           loopPlaybackEnabled: false,
           viewportMode: "follow",
+          activeSegmentId: null,
+          loopPracticeScope: "phrase",
+          lastPracticeSegmentIdByPhrase: {},
         };
       }
       if (!activeRemoved) {
-        return { loops: next, activeLoopId: nextActive, editableLoopId: nextEditable };
+        const removedHadActiveSegment = s.loops
+          .find((l) => l.id === id)
+          ?.segments?.some((seg) => seg.id === s.activeSegmentId);
+        return {
+          loops: next,
+          activeLoopId: nextActive,
+          editableLoopId: nextEditable,
+          activeSegmentId: removedHadActiveSegment ? null : s.activeSegmentId,
+          loopPracticeScope: removedHadActiveSegment
+            ? ("phrase" as const)
+            : s.loopPracticeScope,
+          lastPracticeSegmentIdByPhrase: pruneLast(
+            s.lastPracticeSegmentIdByPhrase,
+          ),
+        };
       }
       const naLoop = nextActive
         ? next.find((l) => l.id === nextActive)
@@ -284,6 +439,11 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         editableLoopId: nextEditable,
         loopPlaybackEnabled: playback,
         loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
+        activeSegmentId: null,
+        loopPracticeScope: "phrase",
+        lastPracticeSegmentIdByPhrase: pruneLast(
+          s.lastPracticeSegmentIdByPhrase,
+        ),
         ...(!playback ? { viewportMode: "follow" as const } : {}),
       };
     }),
@@ -331,6 +491,132 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     const hit = loops.find((l) => l.id === activeLoopId);
     return hit?.tempo ?? 1;
   },
+  setActiveSegmentId: (activeSegmentId) =>
+    set((s) => {
+      if (!activeSegmentId) {
+        return { activeSegmentId: null };
+      }
+      const next: Partial<WoodshedState> = { activeSegmentId };
+      if (s.activeLoopId) {
+        next.lastPracticeSegmentIdByPhrase = {
+          ...s.lastPracticeSegmentIdByPhrase,
+          [s.activeLoopId]: activeSegmentId,
+        };
+      }
+      return next;
+    }),
+  selectSegment: (phraseId, segmentId) =>
+    set((s) => {
+      const loop = s.loops.find((l) => l.id === phraseId);
+      if (!loop?.segments?.some((seg) => seg.id === segmentId)) {
+        return {};
+      }
+      const playback = Boolean(loop.end > loop.start);
+      const nextEditable =
+        phraseId === s.editableLoopId ? s.editableLoopId : null;
+      return {
+        activeLoopId: phraseId,
+        activeSegmentId: segmentId,
+        editableLoopId: nextEditable,
+        loopPlaybackEnabled: playback,
+        loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
+        loopPracticeScope: s.loopPracticeScope,
+        lastPracticeSegmentIdByPhrase: {
+          ...s.lastPracticeSegmentIdByPhrase,
+          [phraseId]: segmentId,
+        },
+        ...(!playback ? { viewportMode: "follow" as const } : {}),
+      };
+    }),
+  setLoopNotes: (phraseId, notes) =>
+    set((s) => ({
+      loops: s.loops.map((l) =>
+        l.id === phraseId ? { ...l, notes } : l,
+      ),
+    })),
+  addSegment: (phraseId) =>
+    set((s) => {
+      const loop = s.loops.find((l) => l.id === phraseId);
+      if (!loop || loop.end <= loop.start) return {};
+      const existing = loop.segments ?? [];
+      const created = createSegmentInPhrase(
+        phraseId,
+        loop.start,
+        loop.end,
+        existing.length + 1,
+      );
+      return {
+        loops: s.loops.map((l) =>
+          l.id === phraseId
+            ? { ...l, segments: [...existing, created] }
+            : l,
+        ),
+        activeSegmentId: created.id,
+        activeLoopId: phraseId,
+        loopPracticeScope: s.loopPracticeScope,
+        lastPracticeSegmentIdByPhrase: {
+          ...s.lastPracticeSegmentIdByPhrase,
+          [phraseId]: created.id,
+        },
+      };
+    }),
+  updateSegment: (phraseId, segmentId, patch) =>
+    set((s) => {
+      const loop = s.loops.find((l) => l.id === phraseId);
+      if (!loop) return {};
+      const segs = loop.segments ?? [];
+      const t = Date.now();
+      const nextSegs = segs.map((seg) => {
+        if (seg.id !== segmentId) return seg;
+        const merged = { ...seg, ...patch, updatedAt: t };
+        const s0 = Math.min(merged.startTime, merged.endTime);
+        const s1 = Math.max(merged.startTime, merged.endTime);
+        return {
+          ...merged,
+          startTime: s0,
+          endTime: s1,
+        };
+      });
+      const clamped = clampSegmentsToPhraseBounds(
+        nextSegs,
+        loop.start,
+        loop.end,
+      );
+      return {
+        loops: s.loops.map((l) =>
+          l.id === phraseId ? { ...l, segments: clamped } : l,
+        ),
+      };
+    }),
+  removeSegment: (phraseId, segmentId) =>
+    set((s) => {
+      const loop = s.loops.find((l) => l.id === phraseId);
+      const prevSegs = loop?.segments ?? [];
+      const nextSegs = prevSegs.filter((x) => x.id !== segmentId);
+      const cleared = s.activeSegmentId === segmentId;
+      const nextLast = { ...s.lastPracticeSegmentIdByPhrase };
+      if (nextLast[phraseId] === segmentId) {
+        const fallback = nextSegs[0]?.id;
+        if (fallback) nextLast[phraseId] = fallback;
+        else delete nextLast[phraseId];
+      }
+      let loopPracticeScope = s.loopPracticeScope;
+      if (nextSegs.length === 0) {
+        loopPracticeScope = "phrase";
+      }
+      return {
+        loops: s.loops.map((l) =>
+          l.id === phraseId ? { ...l, segments: nextSegs } : l,
+        ),
+        activeSegmentId: cleared ? null : s.activeSegmentId,
+        loopPracticeScope,
+        lastPracticeSegmentIdByPhrase: nextLast,
+      };
+    }),
+  requestInspectorSegmentFieldFocus: () =>
+    set((s) => ({
+      inspectorFocusRequestId: s.inspectorFocusRequestId + 1,
+    })),
 }));
 
 function clampTime(value: number, duration: number) {

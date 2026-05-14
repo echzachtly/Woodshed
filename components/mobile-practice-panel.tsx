@@ -15,9 +15,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
+import {
+  getLoopModeDescription,
+  getLoopModeDisplay,
+  getNextLoopModeDisplay,
+} from "@/lib/practice-loop-mode";
 import type { StoredProjectMeta } from "@/lib/project-db";
 import { cn } from "@/lib/utils";
 import type { PracticeLoop } from "@/lib/loop-engine";
+import type { LoopPracticeScope } from "@/store/woodshed-store";
 
 function formatCompactTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -49,7 +55,9 @@ export type MobilePracticeControlsProps = {
   tempoPercent: number;
   loopPlaybackEnabled: boolean;
   canEnableLoopPlayback: boolean;
-  onToggleLoopPlayback: () => void;
+  loopPracticeScope: LoopPracticeScope;
+  phraseHasFocusRegions: boolean;
+  onCycleLoopPlaybackMode: () => void;
   onTogglePlay: () => void;
   onTempoSlider: (pct: number) => void;
   onResetTempoTo100: () => void;
@@ -88,7 +96,9 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
     tempoPercent,
     loopPlaybackEnabled,
     canEnableLoopPlayback,
-    onToggleLoopPlayback,
+    loopPracticeScope,
+    phraseHasFocusRegions,
+    onCycleLoopPlaybackMode,
     onTogglePlay,
     onTempoSlider,
     onResetTempoTo100,
@@ -100,6 +110,19 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
   const [phraseSheetOpen, setPhraseSheetOpen] = useState(false);
   const [projectSheetOpen, setProjectSheetOpen] = useState(false);
   const roundedTempo = Math.round(tempoPercent);
+
+  const loopCurrent = getLoopModeDisplay(
+    loopPlaybackEnabled,
+    loopPracticeScope,
+    phraseHasFocusRegions,
+  );
+  const loopNext = getNextLoopModeDisplay(
+    loopPlaybackEnabled,
+    loopPracticeScope,
+    phraseHasFocusRegions,
+  );
+  const loopTooltip = `${getLoopModeDescription(loopCurrent)} — Next: ${getLoopModeDescription(loopNext)}. Tap to cycle.`;
+  const loopAria = `Practice loop. ${getLoopModeDescription(loopCurrent)}. Next: ${getLoopModeDescription(loopNext)}.`;
 
   const openProjectSheet = () => {
     setPhraseSheetOpen(false);
@@ -200,26 +223,17 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
         <button
           type="button"
           className={cn(
-            "min-h-[44px] rounded-full border px-3.5 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] transition-colors touch-manipulation",
+            "min-h-[44px] max-w-[min(100%,16rem)] rounded-full border px-3 py-2 text-center text-[10px] font-semibold uppercase leading-tight tracking-[0.1em] transition-colors touch-manipulation",
             loopPlaybackEnabled
               ? "border-violet-500/30 bg-violet-500/10 text-violet-200/95"
               : "border-stone-700/35 bg-stone-900/40 text-stone-500",
           )}
-          aria-pressed={loopPlaybackEnabled}
-          aria-label={
-            loopPlaybackEnabled
-              ? "Repeat phrase on — tap to turn off"
-              : "Repeat phrase off — tap to turn on"
-          }
+          aria-label={loopAria}
           disabled={!loopPlaybackEnabled && !canEnableLoopPlayback}
-          title={
-            loopPlaybackEnabled
-              ? "Turn off — play past phrase boundaries"
-              : "Turn on — repeat the selected phrase"
-          }
-          onClick={onToggleLoopPlayback}
+          title={loopTooltip}
+          onClick={onCycleLoopPlaybackMode}
         >
-          {loopPlaybackEnabled ? "Repeat · on" : "Repeat · off"}
+          <span className="block tracking-[0.14em]">{loopCurrent}</span>
         </button>
         <Button
           variant={isPlaying ? "secondary" : "default"}

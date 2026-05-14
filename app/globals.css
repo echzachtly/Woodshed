@@ -130,6 +130,17 @@ body {
   filter: brightness(1.03);
 }
 
+[data-testid="primary-waveform"] .woodshed-region-segment {
+  border-radius: 1px;
+  box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.12);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+[data-testid="primary-waveform"] .woodshed-region-segment:hover {
+  box-shadow: inset 0 0 0 1px rgba(212, 212, 216, 0.22);
+}
+
 /** Resize handles are first/last children in WaveSurfer regions — only meaningful while editing. */
 [data-testid="primary-waveform"] .woodshed-region-editing > :first-child,
 [data-testid="primary-waveform"] .woodshed-region-editing > :last-child {

@@ -19,10 +19,14 @@ type Props = {
   onNavigate: (seconds: number) => void;
   /** Normalized scrollbar ratio (WaveSurfer `scrollLeft/maxScroll`). */
   onViewportPanToRatio: (startRatioNormalized: number) => void;
+  /** Double-click overview to reset zoom to full song (desktop practice). */
+  onFitAll?: () => void;
   /** Mobile practice: visual overview only — no seek or viewport drag. */
   readOnly?: boolean;
   /** Extra classes on the outer wrapper (e.g. compact height on mobile). */
   className?: string;
+  /** Desktop: sit above the main waveform; default sits below. */
+  placement?: "top" | "bottom";
 };
 
 function clampFrac(x: number) {
@@ -39,8 +43,10 @@ export const MiniMap = memo(function MiniMap(props: Props) {
     activeLoopId,
     onNavigate,
     onViewportPanToRatio,
+    onFitAll,
     readOnly = false,
     className,
+    placement = "bottom",
   } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -140,28 +146,35 @@ export const MiniMap = memo(function MiniMap(props: Props) {
       ctx.lineWidth = 1.25;
       ctx.strokeRect(viewX + 0.5, 1.5, viewW - 1, height - 3);
     }
-  }, [peaks, duration, currentTime, viewport, loops, activeLoopId]);
+  }, [peaks, duration, currentTime, viewport, loops, activeLoopId, placement]);
 
   return (
     <div
       className={cn(
-        "border-t border-stone-800/50 bg-[#0c0a09]/90 px-5 py-2",
+        placement === "top"
+          ? "border-b border-stone-800/50 bg-[#0c0a09]/90 px-3 py-1 sm:px-4"
+          : "border-t border-stone-800/50 bg-[#0c0a09]/90 px-5 py-2",
         readOnly && "pointer-events-none select-none",
         className,
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] uppercase tracking-[0.18em] text-stone-500">
+      <div className="flex flex-wrap items-center justify-between gap-1.5 text-[10px] uppercase tracking-[0.16em] text-stone-500 sm:gap-2 sm:text-[11px] sm:tracking-[0.18em]">
         <span>Overview</span>
         <span className="text-xs text-stone-400 normal-case tracking-normal">
           {readOnly
             ? "Read-only preview"
-            : "Click to seek · drag the window to pan"}
+            : onFitAll
+              ? "Click to seek · drag to pan · double-click to fit all"
+              : "Click to seek · drag the window to pan"}
         </span>
       </div>
       <canvas
         ref={canvasRef}
         className={cn(
-          "mt-1.5 h-[5.5rem] w-full touch-none select-none rounded-md border border-stone-800/55 bg-stone-950/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_6px_18px_rgba(0,0,0,0.4)]",
+          "w-full touch-none select-none rounded-md border border-stone-800/55 bg-stone-950/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_6px_18px_rgba(0,0,0,0.4)]",
+          placement === "top"
+            ? "mt-1 h-[4.5rem]"
+            : "mt-1.5 h-[5.5rem]",
           readOnly ? "cursor-default" : "cursor-crosshair",
         )}
         onPointerDown={(event) => {
@@ -235,6 +248,11 @@ export const MiniMap = memo(function MiniMap(props: Props) {
           if (readOnly) return;
           canvasRef.current?.releasePointerCapture(event.pointerId);
           dragSession.current = null;
+        }}
+        onDoubleClick={(event) => {
+          if (readOnly || !duration || !onFitAll) return;
+          event.preventDefault();
+          onFitAll();
         }}
       />
     </div>

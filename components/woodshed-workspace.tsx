@@ -12,19 +12,19 @@ import {
 
 import WaveSurfer from "wavesurfer.js";
 
-import { DesktopPracticeStack } from "@/components/desktop-practice-stack";
+import { DesktopHeaderBar } from "@/components/desktop-header-bar";
+import { DesktopInspectorPanel } from "@/components/desktop-inspector-panel";
+import { DesktopTransportBar } from "@/components/desktop-transport-bar";
 import { useAuth } from "@/components/auth-provider";
 import {
   MobilePracticeControls,
 } from "@/components/mobile-practice-panel";
-import { LoopSidebar } from "@/components/loop-sidebar";
 import { MiniMap } from "@/components/mini-map";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { installWaveformPinchZoom } from "@/lib/waveform-mobile-pinch";
 import type { VisibleWindow } from "@/lib/waveform-manager";
 import {
   applyPlaybackTempo,
-  type LoopRail,
   type MediaPlaybackSurface,
 } from "@/lib/audio-engine";
 import type { PracticeLoop } from "@/lib/loop-engine";
@@ -60,6 +60,10 @@ import {
   type PendingDemoHydration,
 } from "@/lib/demo-project";
 import { formatFilenameAsProjectName } from "@/lib/format-upload-project-name";
+import {
+  buildPlaybackLoopRail,
+  getRestartSeekSeconds,
+} from "@/lib/playback-loop-rail";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
@@ -76,8 +80,6 @@ import { useWoodshedStore } from "@/store/woodshed-store";
 /** iOS Safari: combine MIME tokens with extensions so common files stay selectable. */
 const MOBILE_AUDIO_INPUT_ACCEPT =
   "audio/*,.mp3,.m4a,.aac,.wav,.flac,.aiff,.aif";
-
-const DESKTOP_PHRASES_PANEL_KEY = "woodshed-desktop-phrases-panel";
 
 const ALLOWED_AUDIO_EXTENSIONS = new Set([
   "mp3",
@@ -157,18 +159,6 @@ async function analyzeAudioEnvelope(blob: Blob) {
   return decoded;
 }
 
-function buildLoopRail(
-  loops: PracticeLoop[],
-  activeId: string | null,
-  enabled: boolean,
-): LoopRail {
-  const target = loops.find((l) => l.id === activeId);
-  if (!target || !enabled) {
-    return { enabled: false, start: 0, end: Number.POSITIVE_INFINITY };
-  }
-  return { enabled: true, start: target.start, end: target.end };
-}
-
 const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const { user, supabase, refreshUser } = useAuth();
   const [cloudProjects, setCloudProjects] = useState<CloudProjectSummary[]>(
@@ -192,29 +182,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const saveStatusClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-
-  const [phrasesPanelOpen, setPhrasesPanelOpen] = useState(false);
-  useEffect(() => {
-    try {
-      if (sessionStorage.getItem(DESKTOP_PHRASES_PANEL_KEY) === "1") {
-        setPhrasesPanelOpen(true);
-      }
-    } catch {
-      /* private mode */
-    }
-  }, []);
-
-  const togglePhrasesPanel = useCallback(() => {
-    setPhrasesPanelOpen((v) => {
-      const next = !v;
-      try {
-        sessionStorage.setItem(DESKTOP_PHRASES_PANEL_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -262,6 +229,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     loopFocusTick,
     isPlaying,
     currentTime,
+    activeSegmentId,
+    loopPracticeScope,
   } = useWoodshedStore(
     useShallow((s) => ({
       projectName: s.projectName,
@@ -275,11 +244,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       loopFocusTick: s.loopFocusTick,
       isPlaying: s.isPlaying,
       currentTime: s.currentTime,
+      activeSegmentId: s.activeSegmentId,
+      loopPracticeScope: s.loopPracticeScope,
     })),
   );
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === activeLoopId),
     [activeLoopId, loops],
+  );
+
+  const phraseHasFocusRegions = useMemo(
+    () => Boolean(activeLoop?.segments?.length),
+    [activeLoop?.segments],
+  );
+
+  const regionContextActive = useMemo(
+    () =>
+      Boolean(
+        activeSegmentId &&
+          activeLoop?.segments?.some((s) => s.id === activeSegmentId),
+      ),
+    [activeSegmentId, activeLoop?.segments],
   );
 
   const isDemoProject = projectId === DEMO_PROJECT_ID;
@@ -467,6 +452,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleMobilePhraseSelect = useCallback((id: string) => {
     const ws = wavesurferRef.current;
+    useWoodshedStore.getState().setActiveSegmentId(null);
     useWoodshedStore.getState().setLoopPlaybackEnabled(true);
     useWoodshedStore.getState().selectLoop(id);
     const loop = useWoodshedStore.getState().loops.find((l) => l.id === id);
@@ -622,11 +608,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           return;
         }
         const snapshot = useWoodshedStore.getState();
-        const rail = buildLoopRail(
-          snapshot.loops,
-          snapshot.activeLoopId,
-          snapshot.loopPlaybackEnabled,
-        );
+        const rail = buildPlaybackLoopRail(snapshot);
         const t = readPlaybackSeconds(ws);
         if (rail.enabled && rail.end > rail.start) {
           if (t >= rail.end) {
@@ -873,10 +855,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
      * we don't waste a region rebuild. Editable-state is included so flipping
      * in/out of Edit mode rebuilds with the right drag/resize flags.
      */
+    const segSig =
+      !isMobilePractice && renderedLoop?.segments?.length
+        ? renderedLoop.segments
+            .map((s) => `${s.id}:${s.startTime.toFixed(3)}:${s.endTime.toFixed(3)}`)
+            .join(",")
+        : "";
     const signature = renderedLoop
       ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|${
           renderedLoop.id === editableLoopId ? "edit" : "lock"
-        }|m:${isMobilePractice ? "1" : "0"}`
+        }|m:${isMobilePractice ? "1" : "0"}|seg:${segSig}|sel:${activeSegmentId ?? ""}`
       : `empty|m:${isMobilePractice ? "1" : "0"}`;
     if (signature === loopsSignature.current) {
       return;
@@ -950,6 +938,35 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       });
     });
 
+    if (!isMobilePractice && renderedLoop?.segments?.length) {
+      for (const seg of renderedLoop.segments) {
+        const selected = seg.id === activeSegmentId;
+        const sreg = regions.addRegion({
+          id: `seg:${seg.id}`,
+          start: seg.startTime,
+          end: seg.endTime,
+          color: selected
+            ? "rgba(148, 163, 184, 0.11)"
+            : "rgba(100, 116, 139, 0.045)",
+          drag: false,
+          resize: false,
+        }) as RegionHandle & { element?: HTMLElement | null };
+
+        requestAnimationFrame(() => {
+          const el = sreg.element;
+          if (!el) return;
+          el.classList.add("woodshed-region-segment");
+          el.style.pointerEvents = "auto";
+        });
+
+        sreg.on("click", () => {
+          useWoodshedStore
+            .getState()
+            .selectSegment(renderedLoop.id, seg.id);
+        });
+      }
+    }
+
     const domPeek = peekWaveSurferDom(ws);
     if (domPeek && !wheelBound.current) {
       const { scrollContainer, wrapper } = domPeek;
@@ -987,7 +1004,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         useWoodshedStore.getState().setHoverTime(null),
       );
     }
-  }, [loops, activeLoopId, editableLoopId, isMobilePractice]);
+  }, [loops, activeLoopId, editableLoopId, isMobilePractice, activeSegmentId]);
 
   const ingestFile = useCallback(async (blob: Blob) => {
     const ws = wavesurferRef.current;
@@ -1302,10 +1319,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         case "R": {
           event.preventDefault();
           const st = useWoodshedStore.getState();
-          const rail = st.loops.find((l) => l.id === st.activeLoopId);
-          const canEnable = Boolean(rail && rail.end > rail.start);
-          if (!st.loopPlaybackEnabled && !canEnable) break;
-          st.setLoopPlaybackEnabled(!st.loopPlaybackEnabled);
+          const loop = st.loops.find((l) => l.id === st.activeLoopId);
+          const canEnable = Boolean(loop && loop.end > loop.start);
+          if (!canEnable) break;
+          st.cycleLoopPlaybackMode();
           break;
         }
         case "PageDown": {
@@ -1368,6 +1385,49 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (!ws) return;
     if (ws.isPlaying()) ws.pause();
     else void ws.play();
+  }, []);
+
+  const handleTransportEditContext = useCallback(() => {
+    const st = useWoodshedStore.getState();
+    if (!activeLoopId) return;
+    if (st.editableLoopId === activeLoopId) {
+      st.setEditableLoopId(null);
+      return;
+    }
+    const loop = st.loops.find((l) => l.id === activeLoopId);
+    const segId = st.activeSegmentId;
+    const hasSeg = Boolean(
+      segId && loop?.segments?.some((s) => s.id === segId),
+    );
+    if (hasSeg) {
+      st.requestInspectorSegmentFieldFocus();
+      return;
+    }
+    st.setEditableLoopId(activeLoopId);
+    st.setActiveSegmentId(null);
+  }, [activeLoopId]);
+
+  const handleTransportDeleteContext = useCallback(() => {
+    const st = useWoodshedStore.getState();
+    if (!activeLoopId) return;
+    const loop = st.loops.find((l) => l.id === activeLoopId);
+    const segId = st.activeSegmentId;
+    if (segId && loop?.segments?.some((s) => s.id === segId)) {
+      st.removeSegment(activeLoopId, segId);
+      return;
+    }
+    st.removeLoop(activeLoopId);
+  }, [activeLoopId]);
+
+  const handleTransportAddContext = useCallback(() => {
+    const st = useWoodshedStore.getState();
+    const pid = st.activeLoopId;
+    const loop = pid ? st.loops.find((l) => l.id === pid) : undefined;
+    if (!pid || !loop || loop.end <= loop.start || !st.duration) {
+      st.addLoopCandidate();
+      return;
+    }
+    st.addSegment(pid);
   }, []);
 
   const handleTransportTempo = useCallback((pct: number) => {
@@ -1441,7 +1501,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       aria-label="Woodshed workspace"
     >
       {!isMobilePractice ? (
-        <DesktopPracticeStack
+        <DesktopHeaderBar
           projectName={projectName}
           isDemoProject={isDemoProject}
           sessionSelectValue={sessionSelectValue}
@@ -1461,8 +1521,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           onCreateNewPhrase={() => {
             useWoodshedStore.getState().addLoopCandidate();
           }}
-          phrasesPanelOpen={phrasesPanelOpen}
-          onTogglePhrasesPanel={togglePhrasesPanel}
           saveDisabled={isDemoProject}
           saveLabel={
             isSupabaseConfigured() && supabase && cloudSessionUserId
@@ -1488,35 +1546,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             "aria-hidden": true,
           }}
           onSaveProject={() => void persistSession()}
-          duration={duration}
-          currentTime={currentTime}
-          isPlaying={isPlaying}
-          loopPlaybackEnabled={loopPlaybackEnabled}
-          canEnableLoopPlayback={Boolean(
-            activeLoop && activeLoop.end > activeLoop.start,
-          )}
-          tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-          onTogglePlay={handleTransportTogglePlay}
-          onRestartLoop={() => {
-            const ws = wavesurferRef.current;
-            if (!ws || !activeLoopId) return;
-            const rail = loops.find((l) => l.id === activeLoopId);
-            if (!rail) return;
-            ws.setTime(rail.start);
-            void ws.play();
-          }}
-          onResetZoomFullSong={handleResetZoomFullSong}
-          onToggleLoopPlayback={() =>
-            useWoodshedStore
-              .getState()
-              .setLoopPlaybackEnabled(!loopPlaybackEnabled)
-          }
-          onTempoSlider={handleTransportTempo}
-          formatTime={(t) => formatTime(t)}
         />
       ) : null}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           className={cn(
             "min-h-0 min-w-0 flex-1",
@@ -1553,10 +1586,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               canEnableLoopPlayback={Boolean(
                 activeLoop && activeLoop.end > activeLoop.start,
               )}
-              onToggleLoopPlayback={() =>
-                useWoodshedStore
-                  .getState()
-                  .setLoopPlaybackEnabled(!loopPlaybackEnabled)
+              loopPracticeScope={loopPracticeScope}
+              phraseHasFocusRegions={phraseHasFocusRegions}
+              onCycleLoopPlaybackMode={() =>
+                useWoodshedStore.getState().cycleLoopPlaybackMode()
               }
               onTogglePlay={handleTransportTogglePlay}
               onTempoSlider={handleTransportTempo}
@@ -1566,22 +1599,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               onSelectPhrase={handleMobilePhraseSelect}
             />
           ) : null}
-          <div
-            className={cn(
-              "relative flex min-h-0 min-w-0 flex-[1_1_62%] flex-col overflow-hidden border-b border-stone-900 bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] px-5 py-4",
-              !isMobilePractice && "pt-9 pb-6 sm:pt-10 sm:pb-7",
-              isMobilePractice &&
-                "min-h-0 flex-none touch-manipulation border-b-stone-800/80 px-3 py-2 [touch-action:pan-x]",
-            )}
-          >
-            <div
-              ref={containerRef}
-              data-testid="primary-waveform"
-              className="relative z-0 h-full w-full min-h-0"
-            />
-          </div>
           {!isMobilePractice ? (
             <MiniMap
+              placement="top"
               peaks={decodedPeaks}
               duration={duration}
               loops={loops}
@@ -1598,28 +1618,74 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                 st.exitPhraseFitAfterUserNavigation();
                 setWaveNormalizedScroll(wavesurferRef.current, ratio);
               }}
+              onFitAll={handleResetZoomFullSong}
             />
           ) : null}
-        </div>
-
-        {phrasesPanelOpen ? (
-          <div className="max-[768px]:hidden min-h-0 min-w-0 xl:w-[320px] xl:shrink-0 xl:transition-[width] xl:duration-200 xl:ease-out">
-            <LoopSidebar
-              loops={loops}
-              activeLoopId={activeLoopId}
-              editableLoopId={editableLoopId}
-              onSelectLoop={(id) => useWoodshedStore.getState().selectLoop(id)}
-              onRenameLoop={(id, next) =>
-                useWoodshedStore.getState().renameLoop(id, next)
-              }
-              onAddLoop={() => useWoodshedStore.getState().addLoopCandidate()}
-              onRemoveLoop={(id) => useWoodshedStore.getState().removeLoop(id)}
-              onSetEditable={(id) =>
-                useWoodshedStore.getState().setEditableLoopId(id)
-              }
+          <div
+            className={cn(
+              "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+              !isMobilePractice &&
+                "min-h-0 flex-1 border-0 px-3 py-2 sm:px-4 sm:py-2.5",
+              isMobilePractice &&
+                "min-h-0 flex-1 touch-manipulation border-b border-stone-800/80 px-3 py-2 [touch-action:pan-x]",
+            )}
+          >
+            <div
+              ref={containerRef}
+              data-testid="primary-waveform"
+              className="relative z-0 h-full w-full min-h-0"
             />
           </div>
-        ) : null}
+          {!isMobilePractice ? (
+            <>
+              <DesktopTransportBar
+                duration={duration}
+                currentTime={currentTime}
+                isPlaying={isPlaying}
+                loopPlaybackEnabled={loopPlaybackEnabled}
+                canEnableLoopPlayback={Boolean(
+                  activeLoop && activeLoop.end > activeLoop.start,
+                )}
+                loopPracticeScope={loopPracticeScope}
+                hasActivePhrase={Boolean(
+                  activeLoop && activeLoop.end > activeLoop.start,
+                )}
+                phraseHasFocusRegions={phraseHasFocusRegions}
+                regionContextActive={regionContextActive}
+                activeLoopId={activeLoopId}
+                editableLoopId={editableLoopId}
+                onToggleEditContext={handleTransportEditContext}
+                onDeleteContext={handleTransportDeleteContext}
+                onAddContext={handleTransportAddContext}
+                tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+                onTogglePlay={handleTransportTogglePlay}
+                onRestartLoop={() => {
+                  const ws = wavesurferRef.current;
+                  if (!ws || !activeLoopId) return;
+                  const st = useWoodshedStore.getState();
+                  const loop = loops.find((l) => l.id === activeLoopId);
+                  if (!loop) return;
+                  ws.setTime(
+                    getRestartSeekSeconds({
+                      loop,
+                      loopPracticeScope: st.loopPracticeScope,
+                      activeSegmentId: st.activeSegmentId,
+                      lastPracticeSegmentIdByPhrase:
+                        st.lastPracticeSegmentIdByPhrase,
+                    }),
+                  );
+                  void ws.play();
+                }}
+                onCycleLoopPlaybackMode={() =>
+                  useWoodshedStore.getState().cycleLoopPlaybackMode()
+                }
+                onTempoSlider={handleTransportTempo}
+                formatTime={(t) => formatTime(t)}
+              />
+              <DesktopInspectorPanel />
+            </>
+          ) : null}
+        </div>
       </div>
     </section>
   );
@@ -1687,6 +1753,8 @@ function installWaveformPanGesture(
     const target = event.target as Element | null;
     /** Editable region drag/resize is owned by the WaveSurfer regions plugin. */
     if (target?.closest(".woodshed-region-editing")) return;
+    /** Focus region markers use region clicks — do not arm waveform pan from them. */
+    if (target?.closest(".woodshed-region-segment")) return;
 
     startX = event.clientX;
     startScrollLeft = container.scrollLeft;
