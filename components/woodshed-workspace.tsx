@@ -14,7 +14,6 @@ import WaveSurfer from "wavesurfer.js";
 import { AppHeader, WorkspaceTransportBar } from "@/components/transport-bar";
 import { useAuth } from "@/components/auth-provider";
 import {
-  MobilePhraseNav,
   MobilePracticeControls,
 } from "@/components/mobile-practice-panel";
 import { LoopSidebar } from "@/components/loop-sidebar";
@@ -1432,7 +1431,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           className={cn(
             "min-h-0 min-w-0 flex-1",
             isMobilePractice
-              ? "grid h-full w-full grid-rows-[auto_minmax(11rem,34vh)_minmax(0,1fr)]"
+              ? "grid h-full w-full grid-rows-[auto_1fr]"
               : "flex flex-col",
           )}
         >
@@ -1455,6 +1454,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               onTogglePlay={handleTransportTogglePlay}
               onTempoSlider={handleTransportTempo}
               onResetTempoTo100={handleResetTempo100}
+              loops={loops}
+              activeLoopId={activeLoopId}
+              onSelectPhrase={handleMobilePhraseSelect}
             />
           ) : null}
           <WorkspaceTransportBar
@@ -1498,13 +1500,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               className="relative z-0 h-full w-full min-h-0"
             />
           </div>
-          {isMobilePractice ? (
-            <MobilePhraseNav
-              loops={loops}
-              activeLoopId={activeLoopId}
-              onSelectPhrase={handleMobilePhraseSelect}
-            />
-          ) : null}
           {!isMobilePractice ? (
             <MiniMap
               peaks={decodedPeaks}
