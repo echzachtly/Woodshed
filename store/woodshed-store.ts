@@ -134,6 +134,16 @@ type WoodshedActions = {
   ) => void;
   removeSegment: (phraseId: string, segmentId: string) => void;
   requestInspectorSegmentFieldFocus: () => void;
+  /**
+   * After project hydration — restore validated practice prefs (loop mode, focus map).
+   * Does not replace loops; call after `upsertLoops` + `selectLoop`.
+   */
+  applyHydratedPracticePreferences: (prefs: {
+    loopPlaybackEnabled: boolean;
+    loopPracticeScope: LoopPracticeScope;
+    activeSegmentId: string | null;
+    lastPracticeSegmentIdByPhrase: Record<string, string>;
+  }) => void;
 };
 
 export type WoodshedStore = WoodshedState & WoodshedActions;
@@ -366,21 +376,21 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
   updateLoopBounds: (id, start, end) => {
     const { duration } = get();
     if (!duration) return;
-    let s = Math.max(0, Math.min(start, end));
+    const startSec = Math.max(0, Math.min(start, end));
     let e = Math.min(duration, Math.max(start, end));
     const minSpan = Math.min(0.05, duration * 0.001);
-    if (e - s < minSpan) e = Math.min(duration, s + minSpan);
+    if (e - startSec < minSpan) e = Math.min(duration, startSec + minSpan);
 
     set((state) => ({
       loops: state.loops.map((l) => {
         if (l.id !== id) return l;
         const nextSeg =
           l.segments !== undefined
-            ? clampSegmentsToPhraseBounds(l.segments, s, e)
+            ? clampSegmentsToPhraseBounds(l.segments, startSec, e)
             : undefined;
         return {
           ...l,
-          start: s,
+          start: startSec,
           end: e,
           ...(nextSeg !== undefined ? { segments: nextSeg } : {}),
         };
@@ -617,6 +627,46 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     set((s) => ({
       inspectorFocusRequestId: s.inspectorFocusRequestId + 1,
     })),
+  applyHydratedPracticePreferences: (prefs) =>
+    set((s) => {
+      const activeId = s.activeLoopId;
+      const loop = activeId ? s.loops.find((l) => l.id === activeId) : undefined;
+      const playbackOk = Boolean(loop && loop.end > loop.start);
+      const loopPlaybackEnabled = prefs.loopPlaybackEnabled && playbackOk;
+      let loopPracticeScope = prefs.loopPracticeScope;
+      let activeSegmentId = prefs.activeSegmentId;
+      const lastPracticeSegmentIdByPhrase = {
+        ...prefs.lastPracticeSegmentIdByPhrase,
+      };
+
+      if (loopPracticeScope === "practice_region" && !loop?.segments?.length) {
+        loopPracticeScope = "phrase";
+      }
+      if (
+        activeSegmentId &&
+        !loop?.segments?.some((seg) => seg.id === activeSegmentId)
+      ) {
+        activeSegmentId = null;
+      }
+
+      if (!loopPlaybackEnabled) {
+        return {
+          loopPlaybackEnabled: false,
+          loopPracticeScope: "phrase" as const,
+          activeSegmentId,
+          lastPracticeSegmentIdByPhrase,
+          viewportMode: "follow" as const,
+        };
+      }
+
+      return {
+        loopPlaybackEnabled: true,
+        loopPracticeScope,
+        activeSegmentId,
+        lastPracticeSegmentIdByPhrase,
+        loopFocusTick: playbackOk ? s.loopFocusTick + 1 : s.loopFocusTick,
+      };
+    }),
 }));
 
 function clampTime(value: number, duration: number) {

@@ -6,6 +6,7 @@ import {
 } from "@/lib/cloud-projects/constants";
 import { formatSupabaseClientError } from "@/lib/cloud-projects/errors";
 import type { PhraseSegment, PracticeLoop } from "@/lib/loop-engine";
+import type { PracticeStatePersistV1 } from "@/lib/practice-state-persist";
 
 export type CloudProjectSummary = {
   id: string;
@@ -20,6 +21,7 @@ type ProjectRow = {
   audio_mime: string;
   active_loop_id: string | null;
   updated_at: string;
+  practice_state?: PracticeStatePersistV1 | null;
 };
 
 type LoopRow = {
@@ -110,6 +112,8 @@ export type CloudProjectPayload = {
   loops: PracticeLoop[];
   activeLoopId: string | null;
   audioBlob: Blob;
+  /** Optional saved practice prefs (loop mode, focus selection). */
+  practiceStateV1?: PracticeStatePersistV1 | null;
 };
 
 /**
@@ -147,6 +151,7 @@ export async function upsertCloudProject(
         audio_mime: mime,
         audio_storage_path: storagePath,
         active_loop_id: payload.activeLoopId,
+        practice_state: payload.practiceStateV1 ?? null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", projectId)
@@ -164,6 +169,7 @@ export async function upsertCloudProject(
       audio_storage_path: storagePath,
       audio_mime: mime,
       active_loop_id: payload.activeLoopId,
+      practice_state: payload.practiceStateV1 ?? null,
     });
     if (error) {
       throw new Error(
@@ -214,6 +220,7 @@ export type LoadedCloudProject = {
   loops: PracticeLoop[];
   activeLoopId: string | null;
   audioBlob: Blob;
+  practiceStateV1?: PracticeStatePersistV1 | null;
 };
 
 export async function loadCloudProject(
@@ -222,7 +229,9 @@ export async function loadCloudProject(
 ): Promise<LoadedCloudProject> {
   const { data: proj, error: pErr } = await supabase
     .from("woodshed_projects")
-    .select("id,name,updated_at,audio_storage_path,audio_mime,active_loop_id")
+    .select(
+      "id,name,updated_at,audio_storage_path,audio_mime,active_loop_id,practice_state",
+    )
     .eq("id", projectId)
     .maybeSingle();
 
@@ -257,6 +266,15 @@ export async function loadCloudProject(
     type: row.audio_mime || "application/octet-stream",
   });
 
+  const practiceStateRaw = row.practice_state;
+  const practiceStateV1 =
+    practiceStateRaw &&
+    typeof practiceStateRaw === "object" &&
+    !Array.isArray(practiceStateRaw) &&
+    (practiceStateRaw as { v?: unknown }).v === 1
+      ? (practiceStateRaw as PracticeStatePersistV1)
+      : null;
+
   return {
     id: row.id,
     name: row.name,
@@ -264,5 +282,6 @@ export async function loadCloudProject(
     loops: mapLoopRows((loopData ?? []) as LoopRow[]),
     activeLoopId: row.active_loop_id,
     audioBlob,
+    practiceStateV1,
   };
 }

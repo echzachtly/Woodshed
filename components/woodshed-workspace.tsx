@@ -60,10 +60,15 @@ import {
   type PendingDemoHydration,
 } from "@/lib/demo-project";
 import { formatFilenameAsProjectName } from "@/lib/format-upload-project-name";
+import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import {
   buildPlaybackLoopRail,
   getRestartSeekSeconds,
 } from "@/lib/playback-loop-rail";
+import {
+  capturePracticeStatePersistV1,
+  normalizePracticeStatePersistV1,
+} from "@/lib/practice-state-persist";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
@@ -231,6 +236,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     currentTime,
     activeSegmentId,
     loopPracticeScope,
+    lastPracticeSegmentIdByPhrase,
   } = useWoodshedStore(
     useShallow((s) => ({
       projectName: s.projectName,
@@ -246,6 +252,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       currentTime: s.currentTime,
       activeSegmentId: s.activeSegmentId,
       loopPracticeScope: s.loopPracticeScope,
+      lastPracticeSegmentIdByPhrase: s.lastPracticeSegmentIdByPhrase,
     })),
   );
   const activeLoop = useMemo(
@@ -271,6 +278,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const isMobilePractice = useMediaQuery("(max-width: 768px)");
   mobilePracticeModeRef.current = isMobilePractice;
+
+  /** Align chip highlight with resolver when Focus Loop was entered via loop pill only. */
+  const mobileFocusChipSelectedId = useMemo(() => {
+    if (!isMobilePractice || !activeLoop?.segments?.length) {
+      return activeSegmentId;
+    }
+    if (activeSegmentId) return activeSegmentId;
+    if (loopPracticeScope !== "practice_region") return null;
+    const seg = resolveFocusPlaybackSegment({
+      loop: activeLoop,
+      activeSegmentId: null,
+      lastPracticeSegmentIdByPhrase,
+    });
+    return seg?.id ?? null;
+  }, [
+    isMobilePractice,
+    activeLoop,
+    activeSegmentId,
+    loopPracticeScope,
+    lastPracticeSegmentIdByPhrase,
+  ]);
 
   const formatTime = useCallback((seconds: number) => {
     if (!Number.isFinite(seconds) || seconds < 0) return "0:00.00";
@@ -451,15 +479,60 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, []);
 
   const handleMobilePhraseSelect = useCallback((id: string) => {
+    const get = useWoodshedStore.getState;
+    get().setActiveSegmentId(null);
+    get().selectLoop(id);
+
+    /**
+     * Phrase selection must move the real media clock, not only the React transport.
+     * A deferred seek after `fitActivePhraseInViewport` could be skipped (e.g. effect
+     * ordering / `!ws` clearing a pending ref), leaving WaveSurfer paused at the prior
+     * time while the store/UI showed the new phrase — Play then resumed the stale time
+     * and the loop rail looked like Play Through.
+     */
+    const st = get();
+    const chosen = st.loops.find((l) => l.id === id);
     const ws = wavesurferRef.current;
-    useWoodshedStore.getState().setActiveSegmentId(null);
-    useWoodshedStore.getState().setLoopPlaybackEnabled(true);
-    useWoodshedStore.getState().selectLoop(id);
-    const loop = useWoodshedStore.getState().loops.find((l) => l.id === id);
-    if (ws && loop && loop.end > loop.start) {
-      ws.setTime(loop.start);
+    if (ws && chosen && chosen.end > chosen.start) {
+      ws.setTime(chosen.start);
+      st.setCurrentTime(chosen.start);
     }
   }, []);
+
+  const handleMobileRestartPractice = useCallback(() => {
+    const ws = wavesurferRef.current;
+    if (!ws || !activeLoopId) return;
+    const st = useWoodshedStore.getState();
+    const loop = st.loops.find((l) => l.id === activeLoopId);
+    if (!loop || loop.end <= loop.start) return;
+    const t = getRestartSeekSeconds({
+      loop,
+      loopPracticeScope: st.loopPracticeScope,
+      activeSegmentId: st.activeSegmentId,
+      lastPracticeSegmentIdByPhrase: st.lastPracticeSegmentIdByPhrase,
+    });
+    ws.setTime(t);
+    st.setCurrentTime(t);
+    void ws.play();
+  }, [activeLoopId]);
+
+  const handleMobileFocusSegmentSelect = useCallback(
+    (segmentId: string) => {
+      if (!activeLoopId) return;
+      const ws = wavesurferRef.current;
+      const get = useWoodshedStore.getState;
+      get().selectSegment(activeLoopId, segmentId);
+      get().setLoopPracticeScope("practice_region");
+      get().setLoopPlaybackEnabled(true);
+      const loop = get().loops.find((l) => l.id === activeLoopId);
+      const seg = loop?.segments?.find((s) => s.id === segmentId);
+      if (ws && seg && seg.endTime > seg.startTime) {
+        ws.setTime(seg.startTime);
+        get().setCurrentTime(seg.startTime);
+      }
+    },
+    [activeLoopId],
+  );
 
   const loadBuiltInDemoProjectRef = useRef<() => Promise<boolean>>(
     async () => false,
@@ -713,6 +786,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           ) {
             state.selectLoop(pending.activeLoopId);
           }
+          const stAfter = useWoodshedStore.getState();
+          const rawPractice = pending.practiceStateV1;
+          if (rawPractice != null) {
+            const normalized = normalizePracticeStatePersistV1(
+              rawPractice,
+              stAfter.loops,
+              stAfter.activeLoopId,
+            );
+            if (normalized) {
+              useWoodshedStore
+                .getState()
+                .applyHydratedPracticePreferences(normalized);
+            }
+          }
           pendingHydration.current = null;
         } else if (demo) {
           const loops = demoRowsToPracticeLoops(demo.loopRows, dur);
@@ -788,12 +875,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     ws.zoom(minPxPerSec);
   }, [minPxPerSec]);
 
-  /** Mobile: allow drag along the wave to seek; desktop keeps click-only seek without drag-to-seek. */
+  /** Mobile: drag-to-seek off while repeating (tap-to-seek only) to reduce accidental scrub; softer drag when play-through. */
   useEffect(() => {
     const ws = wavesurferRef.current;
     if (!ws) return;
-    ws.setOptions({ dragToSeek: isMobilePractice });
-  }, [isMobilePractice]);
+    if (!isMobilePractice) {
+      ws.setOptions({ dragToSeek: false });
+      return;
+    }
+    if (loopPlaybackEnabled) {
+      ws.setOptions({ dragToSeek: false });
+      return;
+    }
+    ws.setOptions({ dragToSeek: { debounceTime: 280 } });
+  }, [isMobilePractice, loopPlaybackEnabled]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;
@@ -855,16 +950,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
      * we don't waste a region rebuild. Editable-state is included so flipping
      * in/out of Edit mode rebuilds with the right drag/resize flags.
      */
-    const segSig =
-      !isMobilePractice && renderedLoop?.segments?.length
-        ? renderedLoop.segments
-            .map((s) => `${s.id}:${s.startTime.toFixed(3)}:${s.endTime.toFixed(3)}`)
-            .join(",")
-        : "";
+    const segSig = renderedLoop?.segments?.length
+      ? renderedLoop.segments
+          .map((s) => `${s.id}:${s.startTime.toFixed(3)}:${s.endTime.toFixed(3)}`)
+          .join(",")
+      : "";
     const signature = renderedLoop
       ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|${
           renderedLoop.id === editableLoopId ? "edit" : "lock"
-        }|m:${isMobilePractice ? "1" : "0"}|seg:${segSig}|sel:${activeSegmentId ?? ""}`
+        }|m:${isMobilePractice ? "1" : "0"}|seg:${segSig}|sel:${mobileFocusChipSelectedId ?? ""}`
       : `empty|m:${isMobilePractice ? "1" : "0"}`;
     if (signature === loopsSignature.current) {
       return;
@@ -938,16 +1032,22 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       });
     });
 
-    if (!isMobilePractice && renderedLoop?.segments?.length) {
+    const segmentMobileReadonly = isMobilePractice;
+    if (renderedLoop?.segments?.length) {
       for (const seg of renderedLoop.segments) {
-        const selected = seg.id === activeSegmentId;
+        const selected = seg.id === mobileFocusChipSelectedId;
         const sreg = regions.addRegion({
           id: `seg:${seg.id}`,
           start: seg.startTime,
           end: seg.endTime,
-          color: selected
-            ? "rgba(148, 163, 184, 0.11)"
-            : "rgba(100, 116, 139, 0.045)",
+          color:
+            segmentMobileReadonly && selected
+              ? "rgba(196, 181, 253, 0.20)"
+              : segmentMobileReadonly
+                ? "rgba(100, 116, 139, 0.055)"
+                : selected
+                  ? "rgba(148, 163, 184, 0.11)"
+                  : "rgba(100, 116, 139, 0.045)",
           drag: false,
           resize: false,
         }) as RegionHandle & { element?: HTMLElement | null };
@@ -956,14 +1056,24 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           const el = sreg.element;
           if (!el) return;
           el.classList.add("woodshed-region-segment");
-          el.style.pointerEvents = "auto";
+          if (segmentMobileReadonly) {
+            el.classList.add("woodshed-region-segment-readonly");
+            if (selected) {
+              el.classList.add("woodshed-region-segment-selected");
+            }
+            el.style.pointerEvents = "none";
+          } else {
+            el.style.pointerEvents = "auto";
+          }
         });
 
-        sreg.on("click", () => {
-          useWoodshedStore
-            .getState()
-            .selectSegment(renderedLoop.id, seg.id);
-        });
+        if (!segmentMobileReadonly) {
+          sreg.on("click", () => {
+            useWoodshedStore
+              .getState()
+              .selectSegment(renderedLoop.id, seg.id);
+          });
+        }
       }
     }
 
@@ -1004,7 +1114,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         useWoodshedStore.getState().setHoverTime(null),
       );
     }
-  }, [loops, activeLoopId, editableLoopId, isMobilePractice, activeSegmentId]);
+  }, [loops, activeLoopId, editableLoopId, isMobilePractice, activeSegmentId, mobileFocusChipSelectedId]);
 
   const ingestFile = useCallback(async (blob: Blob) => {
     const ws = wavesurferRef.current;
@@ -1194,6 +1304,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             loops: snapshot.loops,
             activeLoopId: snapshot.activeLoopId,
             audioBlob: audioBlobRef.current,
+            practiceStateV1: capturePracticeStatePersistV1({
+              loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
+              loopPracticeScope: snapshot.loopPracticeScope,
+              activeSegmentId: snapshot.activeSegmentId,
+              lastPracticeSegmentIdByPhrase:
+                snapshot.lastPracticeSegmentIdByPhrase,
+            }),
           },
         );
         devLog("[Woodshed save] cloud upsert ok", { cloudProjectId: cloudId });
@@ -1230,6 +1347,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         loops: snapshot.loops,
         activeLoopId: snapshot.activeLoopId,
         blobId: pid,
+        practiceStateV1: capturePracticeStatePersistV1({
+          loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
+          loopPracticeScope: snapshot.loopPracticeScope,
+          activeSegmentId: snapshot.activeSegmentId,
+          lastPracticeSegmentIdByPhrase:
+            snapshot.lastPracticeSegmentIdByPhrase,
+        }),
       });
       useWoodshedStore.getState().setProjectMeta(pid, snapshot.projectName);
       await listProjects().then(setProjectsList);
@@ -1463,6 +1587,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               loops: loaded.loops,
               activeLoopId: loaded.activeLoopId,
               updatedAt: loaded.updatedAt,
+              practiceStateV1: loaded.practiceStateV1 ?? undefined,
             },
             { audioBlob: loaded.audioBlob },
           );
@@ -1597,6 +1722,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               loops={loops}
               activeLoopId={activeLoopId}
               onSelectPhrase={handleMobilePhraseSelect}
+              focusSegments={activeLoop?.segments ?? []}
+              onRestartPractice={handleMobileRestartPractice}
+              onSelectFocusSegment={handleMobileFocusSegmentSelect}
+              canRestartPractice={Boolean(
+                activeLoop && activeLoop.end > activeLoop.start,
+              )}
+              focusChipSelectedSegmentId={mobileFocusChipSelectedId}
             />
           ) : null}
           {!isMobilePractice ? (
@@ -1627,8 +1759,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               !isMobilePractice &&
                 "min-h-0 flex-1 border-0 px-3 py-2 sm:px-4 sm:py-2.5",
               isMobilePractice &&
-                "min-h-0 flex-1 touch-manipulation border-b border-stone-800/80 px-3 py-2 [touch-action:pan-x]",
+                "min-h-0 flex-1 touch-manipulation border-b border-stone-800/80 px-3 py-2",
             )}
+            data-mobile-practice={isMobilePractice ? "true" : undefined}
           >
             <div
               ref={containerRef}

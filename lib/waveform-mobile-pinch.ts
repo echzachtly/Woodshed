@@ -33,7 +33,20 @@ export function installWaveformPinchZoom(
   let anchorContentX = 0;
 
   const onTouchStart = (e: TouchEvent) => {
-    if (!options.isMobilePractice() || e.touches.length !== 2) return;
+    if (!options.isMobilePractice()) {
+      sc.style.removeProperty("touch-action");
+      return;
+    }
+    /**
+     * WaveSurfer’s scroll `.scroll` node lives in shadow DOM with `touch-action: auto`.
+     * A narrow `touch-action: pan-x` on an ancestor overrides `touch-manipulation` in Tailwind
+     * (whichever utility wins in the stylesheet) and can block cancelable pinch `touchmove`
+     * delivery. We set `manipulation` inline on the scroll surface during mobile practice so
+     * two-finger pinch stays reliable.
+     */
+    sc.style.touchAction = "manipulation";
+
+    if (e.touches.length !== 2) return;
     const t0 = e.touches[0];
     const t1 = e.touches[1];
     const dx = t0.clientX - t1.clientX;
@@ -48,6 +61,8 @@ export function installWaveformPinchZoom(
     const rect = sc.getBoundingClientRect();
     const midClientX = (t0.clientX + t1.clientX) / 2;
     anchorContentX = sc.scrollLeft + (midClientX - rect.left);
+    /** Claim the gesture before the browser treats it as native pinch / scroll. */
+    e.preventDefault();
   };
 
   const onTouchMove = (e: TouchEvent) => {
@@ -94,12 +109,13 @@ export function installWaveformPinchZoom(
     pinchActive = false;
   };
 
-  sc.addEventListener("touchstart", onTouchStart, { passive: true });
+  sc.addEventListener("touchstart", onTouchStart, { passive: false });
   sc.addEventListener("touchmove", onTouchMove, { passive: false });
   sc.addEventListener("touchend", endPinch);
   sc.addEventListener("touchcancel", endPinch);
 
   return () => {
+    sc.style.removeProperty("touch-action");
     sc.removeEventListener("touchstart", onTouchStart);
     sc.removeEventListener("touchmove", onTouchMove);
     sc.removeEventListener("touchend", endPinch);

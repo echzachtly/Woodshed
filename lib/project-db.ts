@@ -1,6 +1,7 @@
 import Dexie, { type Table } from "dexie";
 
 import type { PracticeLoop } from "@/lib/loop-engine";
+import type { PracticeStatePersistV1 } from "@/lib/practice-state-persist";
 
 export type StoredProjectMeta = {
   id: string;
@@ -10,6 +11,8 @@ export type StoredProjectMeta = {
   activeLoopId: string | null;
   /** Audio blob FK */
   blobId?: string | null;
+  /** Saved loop mode / focus selection (optional for older saves). */
+  practiceStateV1?: PracticeStatePersistV1 | null;
 };
 
 export class WoodshedDexie extends Dexie {

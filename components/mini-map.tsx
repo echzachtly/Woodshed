@@ -27,6 +27,8 @@ type Props = {
   className?: string;
   /** Desktop: sit above the main waveform; default sits below. */
   placement?: "top" | "bottom";
+  /** Tighter strip for mobile overview under transport. */
+  density?: "default" | "compact";
 };
 
 function clampFrac(x: number) {
@@ -47,7 +49,9 @@ export const MiniMap = memo(function MiniMap(props: Props) {
     readOnly = false,
     className,
     placement = "bottom",
+    density = "default",
   } = props;
+  const compact = density === "compact";
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const dragSession = useRef<
@@ -146,7 +150,7 @@ export const MiniMap = memo(function MiniMap(props: Props) {
       ctx.lineWidth = 1.25;
       ctx.strokeRect(viewX + 0.5, 1.5, viewW - 1, height - 3);
     }
-  }, [peaks, duration, currentTime, viewport, loops, activeLoopId, placement]);
+  }, [peaks, duration, currentTime, viewport, loops, activeLoopId, placement, density]);
 
   return (
     <div
@@ -154,13 +158,24 @@ export const MiniMap = memo(function MiniMap(props: Props) {
         placement === "top"
           ? "border-b border-stone-800/50 bg-[#0c0a09]/90 px-3 py-1 sm:px-4"
           : "border-t border-stone-800/50 bg-[#0c0a09]/90 px-5 py-2",
+        compact && "border-b border-stone-800/45 bg-[#0c0a09]/85 px-2 py-1",
         readOnly && "pointer-events-none select-none",
         className,
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-1.5 text-[10px] uppercase tracking-[0.16em] text-stone-500 sm:gap-2 sm:text-[11px] sm:tracking-[0.18em]">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-1.5 text-[10px] uppercase tracking-[0.16em] text-stone-500 sm:gap-2 sm:text-[11px] sm:tracking-[0.18em]",
+          compact && "gap-1 text-[9px] tracking-[0.12em]",
+        )}
+      >
         <span>Overview</span>
-        <span className="text-xs text-stone-400 normal-case tracking-normal">
+        <span
+          className={cn(
+            "text-xs text-stone-400 normal-case tracking-normal",
+            compact && "max-w-[70%] truncate text-[9px]",
+          )}
+        >
           {readOnly
             ? "Read-only preview"
             : onFitAll
@@ -172,7 +187,7 @@ export const MiniMap = memo(function MiniMap(props: Props) {
         ref={canvasRef}
         className={cn(
           "w-full touch-none select-none rounded-md border border-stone-800/55 bg-stone-950/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_6px_18px_rgba(0,0,0,0.4)]",
-          placement === "top"
+          compact ? "mt-0.5 h-10" : placement === "top"
             ? "mt-1 h-[4.5rem]"
             : "mt-1.5 h-[5.5rem]",
           readOnly ? "cursor-default" : "cursor-crosshair",
