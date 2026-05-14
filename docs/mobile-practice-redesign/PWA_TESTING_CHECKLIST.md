@@ -27,11 +27,13 @@ Lightweight installability pass: **no service worker**, **no offline cache**, **
 
 1. Launch Woodshed from the **home screen icon** (not from Safari tabs).
 2. The app should open **without Safari’s URL bar** (standalone). Swipe from bottom may show the home indicator only.
-3. **Status bar:** `appleWebApp.statusBarStyle` is `black-translucent` — content can extend under the status bar; `viewportFit: cover` is set. Verify the top of the UI is not permanently obscured (practice surfaces already use safe-area where needed, e.g. bottom sheets).
+3. **Status bar:** `appleWebApp.statusBarStyle` is `black-translucent` — content can extend under the status bar; `viewportFit: cover` is set. The home `main` shell uses **`padding-top: env(safe-area-inset-top)`** in **`display-mode: standalone`** only (`globals.css` + `.woodshed-pwa-mobile-shell` on `app/page.tsx`) so the mobile project header clears the Dynamic Island / status area.
+4. Compare **Safari tab** vs **home screen icon**: extra top inset should appear only in standalone PWA, not in normal browser tabs.
 
 ### After launch, verify
 
 - [ ] App loads at `/` and practice UI works as in the browser tab.
+- [ ] **Standalone:** Top project / phrase controls sit **below** the status bar or Dynamic Island (not clipped).
 - [ ] Rotation (if you use it) still behaves; manifest `orientation` is `any`.
 - [ ] No broken assets or mixed-content warnings in Safari Web Inspector (Mac) → Develop → phone.
 

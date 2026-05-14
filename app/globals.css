@@ -29,6 +29,19 @@ body {
     sans-serif;
 }
 
+/**
+ * iOS home-screen PWA (`display-mode: standalone`) with `viewport-fit=cover` +
+ * `apple-mobile-web-app-status-bar-style=black-translucent` draws under the status /
+ * Dynamic Island. Inset the app shell so the first row (mobile project header) stays
+ * tappable and visible. Browser tabs keep normal layout (no standalone → no extra pad).
+ */
+@media (display-mode: standalone) {
+  .woodshed-pwa-mobile-shell {
+    box-sizing: border-box;
+    padding-top: max(0px, env(safe-area-inset-top, 0px));
+  }
+}
+
 /** WaveSurfer cursor part — hidden; playback is shown only via waveform fill. */
 ::part(cursor) {
   display: none !important;

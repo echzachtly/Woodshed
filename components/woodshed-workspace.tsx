@@ -1620,7 +1620,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   return (
     <section
       ref={sectionRef}
-      className="flex h-dvh flex-col overflow-hidden bg-stone-950 text-stone-50 outline-none"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-stone-950 text-stone-50 outline-none"
       tabIndex={-1}
       onKeyDown={handleKeyboard}
       aria-label="Woodshed workspace"

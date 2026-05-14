@@ -11,7 +11,7 @@ const WoodshedWorkspace = dynamic(
   {
     ssr: false,
     loading: () => (
-      <section className="flex h-dvh flex-col items-center justify-center gap-3 bg-stone-950 text-stone-300">
+      <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-stone-950 text-stone-300">
         <div
           aria-hidden
           className="h-8 w-8 animate-pulse rounded-full bg-violet-400/30 ring-1 ring-violet-400/50"
@@ -26,7 +26,7 @@ const WoodshedWorkspace = dynamic(
 
 export default function Home() {
   return (
-    <main className="h-dvh bg-stone-950 text-stone-50">
+    <main className="woodshed-pwa-mobile-shell flex h-dvh flex-col bg-stone-950 text-stone-50">
       <WoodshedWorkspace />
     </main>
   );
