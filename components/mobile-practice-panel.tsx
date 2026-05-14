@@ -1,7 +1,7 @@
 "use client";
 
 import { Pause, Play } from "lucide-react";
-import { memo, useState, type ChangeEvent, type RefObject } from "react";
+import { memo, useCallback, useState, type ChangeEvent, type RefObject } from "react";
 
 import { HeaderAccount } from "@/components/header-account";
 import {
@@ -111,6 +111,10 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
     setPhraseSheetOpen(true);
   };
 
+  const openAudioFromProjectSheet = useCallback(() => {
+    fileInputRef.current?.click();
+  }, [fileInputRef]);
+
   return (
     <div
       className="shrink-0 space-y-4 border-b border-stone-800/45 bg-gradient-to-b from-stone-950 to-[#0a0908] px-4 py-3 min-[769px]:hidden"
@@ -181,6 +185,7 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
         cloudProjects={cloudProjects}
         showCloudSessions={showCloudSessions}
         onSelectProject={onRestoreProject}
+        onOpenAudioFile={openAudioFromProjectSheet}
       />
 
       <MobilePhraseBottomSheet

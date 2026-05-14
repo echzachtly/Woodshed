@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, Upload, X } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -31,6 +31,8 @@ export type MobileProjectBottomSheetProps = {
   cloudProjects: CloudProjectSummary[];
   showCloudSessions: boolean;
   onSelectProject: (id: string) => void | Promise<void>;
+  /** Close sheet then open the hidden audio file input (mobile practice). */
+  onOpenAudioFile: () => void;
 };
 
 export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
@@ -46,6 +48,7 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
     cloudProjects,
     showCloudSessions,
     onSelectProject,
+    onOpenAudioFile,
   } = props;
   const titleId = useId();
   const sheetRef = useRef<HTMLDivElement | null>(null);
@@ -107,6 +110,13 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
   const handlePick = (id: string) => {
     void onSelectProject(id);
     onClose();
+  };
+
+  const handleOpenAudioFile = () => {
+    onClose();
+    window.requestAnimationFrame(() => {
+      onOpenAudioFile();
+    });
   };
 
   if (!mounted) return null;
@@ -207,6 +217,33 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[14px] font-medium leading-snug">
                     {demoProjectLabel}
+                  </span>
+                </button>
+              </li>
+
+              <li className="px-1 pt-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-500">
+                  Open
+                </p>
+              </li>
+              <li className="min-w-0">
+                <button
+                  type="button"
+                  onClick={handleOpenAudioFile}
+                  className={cn(
+                    "flex min-h-[48px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors touch-manipulation",
+                    "text-stone-400 hover:bg-stone-800/50 hover:text-stone-200 active:bg-stone-800/70",
+                  )}
+                  aria-label="Open audio file from your device"
+                >
+                  <span
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-stone-700/40 bg-stone-800/40 text-stone-500"
+                    aria-hidden
+                  >
+                    <Upload className="h-3 w-3" strokeWidth={2} />
+                  </span>
+                  <span className="min-w-0 flex-1 text-[14px] font-medium leading-snug">
+                    Open audio file…
                   </span>
                 </button>
               </li>
