@@ -1,7 +1,7 @@
 "use client";
 
 import { Pause, Play } from "lucide-react";
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -174,52 +174,82 @@ export const MobilePhraseNav = memo(function MobilePhraseNav(
   props: MobilePhraseNavProps,
 ) {
   const { loops, activeLoopId, onSelectPhrase } = props;
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!activeLoopId) return;
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let cancelled = false;
+    const frame = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      activeRowRef.current?.scrollIntoView({
+        block: "nearest",
+        behavior: prefersReduced ? "auto" : "smooth",
+      });
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeLoopId]);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-t border-stone-800/40 bg-stone-950/90 min-[769px]:hidden">
-      <header className="shrink-0 px-4 pb-2 pt-3">
-        <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-stone-400">
+    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-t border-stone-800/35 bg-stone-950/95 min-[769px]:hidden">
+      <header className="shrink-0 px-4 pb-1.5 pt-3">
+        <h2 className="text-[11px] font-medium uppercase tracking-[0.2em] text-stone-500">
           Phrases
-        </p>
-        <p className="text-[10px] text-stone-500">
-          Tap a phrase to select it and turn on repeat.
-        </p>
+        </h2>
       </header>
       <ul
-        className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-y-contain px-3 pb-3 [-webkit-overflow-scrolling:touch]"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-y-contain px-3 pb-4 pt-0.5 [-webkit-overflow-scrolling:touch]"
         role="list"
+        aria-label="Saved phrases"
       >
         {loops.length === 0 ? (
-          <li className="px-1 py-6 text-center text-[12px] text-stone-500">
+          <li className="flex min-h-[48px] items-center justify-center px-2 py-4 text-center text-[13px] text-stone-500">
             No phrases in this project yet.
           </li>
         ) : null}
         {loops.map((loop) => {
           const active = loop.id === activeLoopId;
           return (
-            <li key={loop.id}>
+            <li key={loop.id} className="min-w-0">
               <button
+                ref={active ? activeRowRef : null}
+                aria-current={active ? "true" : undefined}
                 type="button"
                 onClick={() => onSelectPhrase(loop.id)}
                 className={cn(
-                  "flex w-full items-start gap-2.5 rounded-md py-2.5 pl-2.5 pr-3 text-left transition-colors touch-manipulation",
+                  "flex min-h-[48px] w-full max-w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors touch-manipulation sm:min-h-[52px]",
                   active
-                    ? "bg-violet-500/[0.09] text-stone-50"
-                    : "text-stone-300 hover:bg-stone-800/50 active:bg-stone-800/70",
+                    ? "bg-violet-500/[0.12] text-stone-50"
+                    : "text-stone-300 hover:bg-stone-800/45 active:bg-stone-800/65",
                 )}
               >
                 <span
                   className={cn(
-                    "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
-                    active ? "bg-violet-400" : "bg-stone-600",
+                    "h-2 w-2 shrink-0 rounded-full transition-colors",
+                    active ? "bg-violet-400 shadow-[0_0_0_3px_rgba(167,139,250,0.12)]" : "bg-stone-600",
                   )}
                   aria-hidden
                 />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] font-medium leading-snug">
+                <span className="min-w-0 flex-1 py-0.5">
+                  <span
+                    className={cn(
+                      "block truncate text-[15px] leading-snug",
+                      active ? "font-semibold text-stone-50" : "font-medium text-stone-200",
+                    )}
+                  >
                     {loop.name}
                   </span>
-                  <span className="mt-0.5 block font-mono text-[11px] tabular-nums text-stone-500">
+                  <span
+                    className={cn(
+                      "mt-1 block font-mono text-[12px] tabular-nums leading-none",
+                      active ? "text-violet-200/70" : "text-stone-500",
+                    )}
+                  >
                     {formatPhraseTime(loop.start)} → {formatPhraseTime(loop.end)}
                   </span>
                 </span>

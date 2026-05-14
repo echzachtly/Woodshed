@@ -1413,7 +1413,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           className={cn(
             "min-h-0 min-w-0 flex-1",
             isMobilePractice
-              ? "grid h-full w-full grid-rows-[auto_minmax(0,10rem)_minmax(0,1fr)_auto]"
+              ? "grid h-full w-full grid-rows-[auto_minmax(0,10rem)_auto_minmax(0,1fr)]"
               : "flex flex-col",
           )}
         >
@@ -1479,13 +1479,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               className="relative z-0 h-full w-full min-h-0"
             />
           </div>
-          {isMobilePractice ? (
-            <MobilePhraseNav
-              loops={loops}
-              activeLoopId={activeLoopId}
-              onSelectPhrase={handleMobilePhraseSelect}
-            />
-          ) : null}
           <MiniMap
             peaks={decodedPeaks}
             duration={duration}
@@ -1494,7 +1487,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             viewport={viewport}
             currentTime={currentTime}
             readOnly={isMobilePractice}
-            className={cn(isMobilePractice && "max-[768px]:py-1.5")}
+            className={cn(
+              isMobilePractice &&
+                "max-[768px]:border-t-stone-800/30 max-[768px]:bg-[#090807]/95 max-[768px]:py-1.5 max-[768px]:opacity-[0.92]",
+            )}
             onNavigate={(seconds) => {
               const st = useWoodshedStore.getState();
               if (st.viewportMode === "loop-focused") {
@@ -1510,6 +1506,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               setWaveNormalizedScroll(wavesurferRef.current, ratio);
             }}
           />
+          {isMobilePractice ? (
+            <MobilePhraseNav
+              loops={loops}
+              activeLoopId={activeLoopId}
+              onSelectPhrase={handleMobilePhraseSelect}
+            />
+          ) : null}
         </div>
 
         <div className="max-[768px]:hidden min-h-0 min-w-0 xl:shrink-0">
