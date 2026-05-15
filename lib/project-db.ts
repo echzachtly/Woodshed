@@ -19,6 +19,11 @@ export type StoredProjectMeta = {
    * Omitted on legacy rows → normalized to `{ kind: \"upload\", blobId }` at load time.
    */
   mediaSource?: WoodshedMediaSource | null;
+  /**
+   * Phase 6 — timeline zoom hint for reload (`NeutralTimelinePrototype` / WaveSurfer both use `minPxPerSec`).
+   * Upload saves omit this field today — harmless optional metadata.
+   */
+  minPxPerSecPersist?: number | null;
 };
 
 export class WoodshedDexie extends Dexie {
@@ -60,6 +65,10 @@ export async function loadBlobRecord(id: string): Promise<Blob | undefined> {
 
 export async function deleteProject(id: string) {
   const row = await woodshedDexie.projects.get(id);
-  if (row?.blobId) await woodshedDexie.blobs.delete(row.blobId);
+  /** YouTube Dexie rows never own blob rows — skip audio deletion even if `blobId` is corrupt/spurious. */
+  const skipBlobDeletion = row?.mediaSource?.kind === "youtube";
+  if (!skipBlobDeletion && row?.blobId) {
+    await woodshedDexie.blobs.delete(row.blobId);
+  }
   await woodshedDexie.projects.delete(id);
 }

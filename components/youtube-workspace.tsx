@@ -1,18 +1,19 @@
 "use client";
 
 /**
- * Phase 5 — **isolated YouTube practice workspace** (dev-only).
+ * Phase 5–6 — **isolated YouTube practice workspace** (dev-only).
  *
  * **Why separate from `woodshed-workspace.tsx`:**
  * Production remains WaveSurfer/upload-centric; merging iframe playback + synthetic timeline into that
  * module would balloon conditionals and risk regressions. This shell proves `MediaPlaybackSurface`,
  * `NeutralTimelinePrototype`, and `buildPlaybackLoopRail` compose for non-upload sources.
  *
- * **Future intent:** Fold proven patterns behind a router/layout choice (`mediaSource.kind`) once
- * persistence + import UX exist — likely extracting shared transport/timeline shells first.
+ * **Phase 6:** Dexie-backed session lifecycle (`youtube-dexie-project.ts`) — stores metadata + phrases +
+ * practice prefs only (no audio bytes). Reload streams via YouTube iframe API using persisted `videoId`.
  *
- * **Gaps vs production rollout:** No Dexie/cloud save, no WaveSurfer phrase handles (inspector numeric
- * edits only), coarse iframe clock vs decoded audio, tempo/rate caps vary by video.
+ * **Future intent:** Fold proven patterns behind `mediaSource.kind` routing once prod import UX lands.
+ *
+ * **Gaps vs production rollout:** Cloud parity not wired for YouTube; coarse iframe clock vs PCM decode.
  */
 
 import {
@@ -46,6 +47,17 @@ import {
   getRestartSeekSeconds,
   warpPlaybackToLoopRailIfNeeded,
 } from "@/lib/playback-loop-rail";
+import {
+  loadProject,
+  saveProject,
+} from "@/lib/project-db";
+import type { ValidatedYoutubeDexieProjectMeta } from "@/lib/youtube/youtube-dexie-project";
+import {
+  captureYoutubeDexieProjectPayload,
+  hydrateYoutubeDexieIntoStore,
+  listValidatedYoutubeDexieProjects,
+  validateYoutubeDexieProjectMeta,
+} from "@/lib/youtube/youtube-dexie-project";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 const DEFAULT_WATCH_URL = `https://www.youtube.com/watch?v=${YOUTUBE_PROTOTYPE_DEFAULT_VIDEO_ID}`;
@@ -69,6 +81,14 @@ export function YoutubeWorkspace() {
   const [playbackSurface, setPlaybackSurface] =
     useState<MediaPlaybackSurface | null>(null);
 
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const [savedYoutubeProjects, setSavedYoutubeProjects] = useState<
+    ValidatedYoutubeDexieProjectMeta[]
+  >([]);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [persistenceHint, setPersistenceHint] = useState<string | null>(null);
+  const [persistenceErr, setPersistenceErr] = useState<string | null>(null);
+
   const {
     duration,
     currentTime,
@@ -82,10 +102,14 @@ export function YoutubeWorkspace() {
     activeSegmentId,
     lastPracticeSegmentIdByPhrase,
     minPxPerSec,
+    mediaSource,
+    projectId,
+    projectName,
     bootstrapFromDuration,
     setProjectMeta,
     setPlaying,
     setCurrentTime,
+    setDuration,
     setMinPxPerSec,
     exitPhraseFitAfterUserNavigation,
     selectLoop,
@@ -110,10 +134,14 @@ export function YoutubeWorkspace() {
       activeSegmentId: s.activeSegmentId,
       lastPracticeSegmentIdByPhrase: s.lastPracticeSegmentIdByPhrase,
       minPxPerSec: s.minPxPerSec,
+      mediaSource: s.mediaSource,
+      projectId: s.projectId,
+      projectName: s.projectName,
       bootstrapFromDuration: s.bootstrapFromDuration,
       setProjectMeta: s.setProjectMeta,
       setPlaying: s.setPlaying,
       setCurrentTime: s.setCurrentTime,
+      setDuration: s.setDuration,
       setMinPxPerSec: s.setMinPxPerSec,
       exitPhraseFitAfterUserNavigation: s.exitPhraseFitAfterUserNavigation,
       selectLoop: s.selectLoop,
@@ -136,6 +164,20 @@ export function YoutubeWorkspace() {
     return () => resetWorkspace();
   }, [resetWorkspace]);
 
+  const refreshSavedYoutubeProjects = useCallback(async () => {
+    try {
+      const rows = await listValidatedYoutubeDexieProjects();
+      setSavedYoutubeProjects(rows);
+    } catch {
+      setPersistenceErr("Could not read Dexie projects.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) return;
+    void refreshSavedYoutubeProjects();
+  }, [refreshSavedYoutubeProjects]);
+
   /** Bootstrap / teardown YouTube player when the resolved id changes. */
   useEffect(() => {
     if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED || !resolvedId) {
@@ -157,7 +199,6 @@ export function YoutubeWorkspace() {
     setErrorMessage(null);
 
     const boot = async () => {
-      resetWorkspace();
       try {
         await loadYoutubeIframeApi();
         const mountEl = hostRef.current;
@@ -194,13 +235,27 @@ export function YoutubeWorkspace() {
                 const dur = surface.getDuration();
                 if (!(dur > 0)) return false;
                 clearBootstrapPoll();
-                bootstrapFromDuration(dur);
-                setProjectMeta(null, `YouTube (${resolvedId})`, {
-                  kind: "youtube",
-                  videoId: resolvedId,
-                  canonicalUrl: canonicalWatchUrl(resolvedId),
-                  durationSeconds: dur,
-                });
+                const st = useWoodshedStore.getState();
+                if (st.loops.length === 0) {
+                  bootstrapFromDuration(dur);
+                  setProjectMeta(null, `YouTube (${resolvedId})`, {
+                    kind: "youtube",
+                    videoId: resolvedId,
+                    canonicalUrl: canonicalWatchUrl(resolvedId),
+                    durationSeconds: dur,
+                  });
+                } else {
+                  setDuration(Math.max(st.duration || 0, dur));
+                  const ms = st.mediaSource;
+                  if (ms.kind === "youtube") {
+                    setProjectMeta(st.projectId, st.projectName, {
+                      ...ms,
+                      videoId: resolvedId,
+                      canonicalUrl: canonicalWatchUrl(resolvedId),
+                      durationSeconds: dur,
+                    });
+                  }
+                }
                 applyPlaybackTempo(
                   surface,
                   useWoodshedStore.getState().activeLoopTemps(),
@@ -259,11 +314,12 @@ export function YoutubeWorkspace() {
     };
   }, [
     resolvedId,
-    resetWorkspace,
+    sessionGeneration,
     bootstrapFromDuration,
     setProjectMeta,
     setPlaying,
     setCurrentTime,
+    setDuration,
   ]);
 
   /** Mirror WaveSurfer tempo path — YouTube ignores pitch-preservation (`getMediaElement` absent). */
@@ -303,6 +359,75 @@ export function YoutubeWorkspace() {
       cancelAnimationFrame(raf);
     };
   }, [isPlaying, playbackSurface, setPlaying, setCurrentTime]);
+
+  const handleCreateYoutubeProjectSession = useCallback(() => {
+    setPersistenceErr(null);
+    setPersistenceHint(null);
+    resetWorkspace();
+    setSessionGeneration((n) => n + 1);
+  }, [resetWorkspace]);
+
+  const handleSaveYoutubeDexieProject = useCallback(async () => {
+    const st = useWoodshedStore.getState();
+    if (st.mediaSource.kind !== "youtube") {
+      setPersistenceErr(
+        "Wait until the iframe session is active before saving.",
+      );
+      return;
+    }
+    setPersistenceErr(null);
+    setSaveBusy(true);
+    try {
+      const payload = captureYoutubeDexieProjectPayload({
+        projectId: st.projectId,
+        projectName: st.projectName,
+        mediaSource: st.mediaSource,
+        loops: st.loops,
+        activeLoopId: st.activeLoopId,
+        durationSeconds: st.duration,
+        minPxPerSec: st.minPxPerSec,
+        loopPlaybackEnabled: st.loopPlaybackEnabled,
+        loopPracticeScope: st.loopPracticeScope,
+        activeSegmentId: st.activeSegmentId,
+        lastPracticeSegmentIdByPhrase: st.lastPracticeSegmentIdByPhrase,
+      });
+      await saveProject(payload);
+      const ms = payload.mediaSource;
+      if (!ms || ms.kind !== "youtube") {
+        throw new Error("Save payload missing YouTube mediaSource.");
+      }
+      st.setProjectMeta(payload.id, payload.name, ms);
+      setPersistenceHint(`Saved locally (${payload.name}).`);
+      await refreshSavedYoutubeProjects();
+    } catch (e) {
+      setPersistenceErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaveBusy(false);
+    }
+  }, [refreshSavedYoutubeProjects]);
+
+  const handleLoadYoutubeDexieProject = useCallback(async (id: string) => {
+    setPersistenceErr(null);
+    try {
+      const row = await loadProject(id);
+      if (!row) {
+        setPersistenceErr("Dexie row missing.");
+        return;
+      }
+      const v = validateYoutubeDexieProjectMeta(row);
+      if (!v.ok) {
+        setPersistenceErr(v.reason);
+        return;
+      }
+      hydrateYoutubeDexieIntoStore(v.meta);
+      setVideoInput(v.meta.mediaSource.canonicalUrl);
+      setPersistenceHint(`Loaded '${v.meta.name}'.`);
+      setSessionGeneration((n) => n + 1);
+      setErrorMessage(null);
+    } catch (e) {
+      setPersistenceErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   const formatTime = useCallback((seconds: number) => {
     if (!Number.isFinite(seconds) || seconds < 0) return "0:00.00";
@@ -413,19 +538,23 @@ export function YoutubeWorkspace() {
     <section className="flex min-h-screen flex-col bg-[#060504] text-stone-100">
       <header className="border-b border-stone-800/80 px-4 py-3 sm:px-6">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-400">
-          Dev · Phase 5 · YouTube workspace
+          Dev · Phase 5–6 · YouTube workspace
         </p>
         <h1 className="mt-1 text-lg font-semibold tracking-tight text-stone-50">
           Isolated practice shell (iframe playback + synthetic timeline)
         </h1>
         <p className="mt-2 max-w-3xl text-xs leading-relaxed text-stone-500">
-          Uses the shared Zustand store, desktop transport + inspector, and loop rail helpers —
-          without WaveSurfer or upload persistence. Restart / phrase vs focus looping matches
-          production semantics via{" "}
+          Shared store + desktop transport + inspector + loop rails — without WaveSurfer.
+          Phase 6 adds Dexie-only persistence for YouTube metadata + phrases + practice prefs (no audio bytes).
+          Restart / looping semantics mirror production via{" "}
           <code className="rounded bg-stone-900 px-1 py-0.5 text-[10px] text-violet-200">
             buildPlaybackLoopRail
           </code>
           .
+        </p>
+
+        <p className="mt-2 font-mono text-[10px] text-stone-600">
+          {projectId ? `${projectName} · ${projectId}` : `${projectName} · unsaved`}
         </p>
 
         <div className="mt-4 flex max-w-2xl flex-col gap-2 sm:flex-row sm:items-center">
@@ -452,11 +581,60 @@ export function YoutubeWorkspace() {
             </span>
           )}
         </div>
+
+        <div className="mt-4 flex max-w-3xl flex-col gap-2 border-t border-stone-800/70 pt-4 sm:flex-row sm:flex-wrap sm:items-center">
+          <button
+            type="button"
+            className="rounded-md border border-stone-600 bg-stone-900 px-3 py-2 text-xs font-medium text-stone-100 hover:bg-stone-800"
+            onClick={handleCreateYoutubeProjectSession}
+          >
+            New YouTube session
+          </button>
+          <button
+            type="button"
+            disabled={
+              saveBusy ||
+              mediaSource.kind !== "youtube" ||
+              !(duration > 0)
+            }
+            className="rounded-md bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => void handleSaveYoutubeDexieProject()}
+          >
+            {saveBusy ? "Saving…" : "Save to Dexie"}
+          </button>
+          <select
+            className="max-w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-2 text-xs text-stone-200 sm:max-w-xs"
+            defaultValue=""
+            onChange={(e) => {
+              const id = e.target.value;
+              if (id) void handleLoadYoutubeDexieProject(id);
+              e.target.value = "";
+            }}
+          >
+            <option value="">Load saved YouTube project…</option>
+            {savedYoutubeProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} · {p.mediaSource.videoId}
+              </option>
+            ))}
+          </select>
+        </div>
+        {persistenceHint ? (
+          <p className="mt-2 text-xs text-emerald-400/85">{persistenceHint}</p>
+        ) : null}
+        {persistenceErr ? (
+          <p className="mt-2 text-xs text-amber-400/90">{persistenceErr}</p>
+        ) : null}
       </header>
 
       {errorMessage ? (
         <div className="mx-4 mt-3 rounded-md border border-red-900/55 bg-red-950/35 px-3 py-2 text-sm text-red-100 sm:mx-6">
-          {errorMessage}
+          <p>{errorMessage}</p>
+          {loops.length > 0 ? (
+            <p className="mt-2 border-t border-red-900/45 pt-2 text-xs leading-relaxed text-red-100/85">
+              Practice Sections / Focus Loops in memory are unchanged — change the URL, pick another saved session, or continue editing; Save writes the latest Dexie snapshot when playback works again.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

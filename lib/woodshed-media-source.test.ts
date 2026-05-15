@@ -104,6 +104,21 @@ describe("persistMediaSourceForDexieRow", () => {
     });
   });
 
+  test("youtube source passes through unchanged (no blob FK)", () => {
+    const src: WoodshedMediaSource = {
+      kind: "youtube",
+      videoId: "abc12345678",
+      canonicalUrl: "https://youtu.be/abc12345678",
+      durationSeconds: 99,
+    };
+    expect(
+      persistMediaSourceForDexieRow({
+        source: src,
+        resolvedBlobId: "should-not-apply",
+      }),
+    ).toEqual(src);
+  });
+
   test("upload-only default constant shape", () => {
     expect(DEFAULT_UPLOAD_MEDIA_SOURCE.kind).toBe("upload");
   });
