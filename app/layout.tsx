@@ -27,6 +27,9 @@ export const metadata: Metadata = {
   description: "Precision musical phrase isolation workspace",
   applicationName: "Woodshed",
   manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/woodshed-icon.svg", type: "image/svg+xml" }],
+  },
   appleWebApp: {
     capable: true,
     title: "Woodshed",

@@ -1,5 +1,6 @@
 import type WaveSurfer from "wavesurfer.js";
 
+import { isWaveSurferAudioDecoded } from "@/lib/wavesurfer-audio-ready";
 import { peekWaveSurferDom } from "@/lib/waveform-scroll";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import type { WoodshedStore } from "@/store/woodshed-store";
@@ -83,7 +84,7 @@ export function installWaveformPinchZoom(
     const ratio = dist / startDist;
     const nextZoom = Math.min(MAX_PX, Math.max(MIN_PX, startZoom * ratio));
     const dur = ws.getDuration();
-    if (!(dur > 0)) return;
+    if (!(dur > 0) || !isWaveSurferAudioDecoded(ws)) return;
 
     const gutter = WAVEFORM_HORIZONTAL_GUTTER_PX;
     const timeAtAnchor = Math.max(

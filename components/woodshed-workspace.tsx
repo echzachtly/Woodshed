@@ -59,6 +59,10 @@ import {
   resolveDemoAudioBlob,
   type PendingDemoHydration,
 } from "@/lib/demo-project";
+import {
+  FOCUS_REGION_WAVE_PALETTE,
+  focusRegionWavePaletteIndex,
+} from "@/lib/focus-region-wave-palette";
 import { formatFilenameAsProjectName } from "@/lib/format-upload-project-name";
 import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import {
@@ -83,6 +87,15 @@ import {
   logRegionsPinProbe,
   setActivePhraseRegionVirtualAppendPin,
 } from "@/lib/wavesurfer-regions-virtual-append-phrase-pin";
+import { normalizeWaveSurferRegionBounds } from "@/lib/wavesurfer-region-time-bounds";
+import {
+  applyDesktopFocusRegionVisuals,
+  applyMobileReadonlyFocusRegionVisuals,
+  applyPhraseRegionVisuals,
+  focusRegionFillForWave,
+  phraseRegionWaveColor,
+} from "@/lib/wavesurfer-region-appearance";
+import { isWaveSurferAudioDecoded } from "@/lib/wavesurfer-audio-ready";
 import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
 import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
 import { installShiftWaveformAuthoringGesture } from "@/lib/shift-waveform-authoring-gesture";
@@ -347,7 +360,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
    */
   const fitActivePhraseInViewport = useCallback((loop: PracticeLoop) => {
     const ws = wavesurferRef.current;
-    if (!ws) return false;
+    if (!ws || !isWaveSurferAudioDecoded(ws)) return false;
     const span = loop.end - loop.start;
     if (span <= 0) return false;
     const dom = peekWaveSurferDom(ws);
@@ -384,7 +397,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleResetZoomFullSong = useCallback(() => {
     const ws = wavesurferRef.current;
-    if (!ws) return;
+    if (!ws || !isWaveSurferAudioDecoded(ws)) return;
     const st = useWoodshedStore.getState();
     /** Full song is an explicit zoom reset — always leave phrase-focus for follow (matches prior behavior). */
     if (st.viewportMode === "phrase-focus") {
@@ -936,6 +949,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
         applyWaveformGutterMargins();
         updateViewport();
+        if (!destroyed) {
+          ws.zoom(useWoodshedStore.getState().minPxPerSec);
+        }
       });
 
       const tryLoadBuiltInDemo = async () => {
@@ -991,7 +1007,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   useEffect(() => {
     const ws = wavesurferRef.current;
-    if (!ws) return;
+    if (!ws || !isWaveSurferAudioDecoded(ws)) return;
     ws.zoom(minPxPerSec);
   }, [minPxPerSec]);
 
@@ -1129,15 +1145,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         isMobilePractice,
       });
     }
+    const phraseHasSegForRegions = Boolean(renderedLoop?.segments?.length);
     const signature = renderedLoop
       ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|ph:${
           phraseWaveResizeEnabled ? "edit" : "lock"
-        }|m:${isMobilePractice ? "1" : "0"}|seg:${segSig}|segU:${segUnlockSig}|sel:${mobileFocusChipSelectedId ?? ""}`
-      : `empty|m:${isMobilePractice ? "1" : "0"}`;
+        }|m:${isMobilePractice ? "1" : "0"}|lp:${loopPracticeScope}|seg:${segSig}|segU:${segUnlockSig}|sel:${mobileFocusChipSelectedId ?? ""}`
+      : `empty|m:${isMobilePractice ? "1" : "0"}|lp:${loopPracticeScope}`;
     if (signature === loopsSignature.current) {
       return;
     }
     loopsSignature.current = signature;
+
+    const trackDur = ws.getDuration();
 
     phraseHandleDiagCleanupRef.current?.();
     phraseHandleDiagCleanupRef.current = null;
@@ -1172,7 +1191,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const addFocusRegionOverlays = () => {
       const segmentMobileReadonly = isMobilePractice;
       if (!renderedLoop?.segments?.length) return;
-      for (const seg of renderedLoop.segments) {
+      const segmentsOrdered = [...renderedLoop.segments].sort(
+        (a, b) => a.startTime - b.startTime,
+      );
+      for (let segIndex = 0; segIndex < segmentsOrdered.length; segIndex++) {
+        const seg = segmentsOrdered[segIndex];
         const selected = seg.id === mobileFocusChipSelectedId;
         const waveformUnlocked = Boolean(
           focusRegionWaveformEditUnlockedById[seg.id],
@@ -1181,18 +1204,36 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           !segmentMobileReadonly &&
           selected &&
           waveformUnlocked;
+        const paletteIndex = focusRegionWavePaletteIndex(segIndex);
+        const paletteSlot = FOCUS_REGION_WAVE_PALETTE[paletteIndex];
+        const { start: segStart, end: segEnd } = normalizeWaveSurferRegionBounds({
+          startRaw: seg.startTime,
+          endRaw: seg.endTime,
+          trackDuration: trackDur,
+        });
+        if (process.env.NODE_ENV === "development") {
+          console.log("[Woodshed ws region] focus addRegion", {
+            phraseId: renderedLoop.id,
+            phraseName: renderedLoop.name,
+            segmentId: seg.id,
+            segmentName: seg.name,
+            start: segStart,
+            end: segEnd,
+            duration: trackDur,
+            raw: { startTime: seg.startTime, endTime: seg.endTime },
+          });
+        }
+        const focusFront = loopPracticeScope === "practice_region" && phraseHasSegForRegions;
         const sreg = regions.addRegion({
           id: `seg:${seg.id}`,
-          start: seg.startTime,
-          end: seg.endTime,
+          start: segStart,
+          end: segEnd,
           color:
             segmentMobileReadonly && selected
-              ? "rgba(196, 181, 253, 0.20)"
+              ? focusRegionFillForWave(paletteSlot, true, focusFront)
               : segmentMobileReadonly
-                ? "rgba(100, 116, 139, 0.055)"
-                : selected
-                  ? "rgba(167, 180, 198, 0.14)"
-                  : "rgba(100, 116, 139, 0.048)",
+                ? focusRegionFillForWave(paletteSlot, false, focusFront)
+                : focusRegionFillForWave(paletteSlot, selected, focusFront),
           /** Move whole region off — only phrase-level editing uses full drag. */
           drag: false,
           resize: allowSegResize,
@@ -1217,7 +1258,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               el.classList.add("woodshed-region-segment-selected");
             }
             el.style.pointerEvents = "none";
+            applyMobileReadonlyFocusRegionVisuals(
+              el,
+              selected,
+              loopPracticeScope,
+              phraseHasSegForRegions,
+            );
           } else {
+            el.setAttribute("data-focus-palette", String(paletteIndex));
             el.style.pointerEvents = "auto";
             if (selected) {
               el.classList.add("woodshed-region-segment-selected");
@@ -1225,6 +1273,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             if (allowSegResize) {
               el.classList.add("woodshed-region-segment-editable");
             }
+            applyDesktopFocusRegionVisuals(
+              el,
+              paletteIndex,
+              selected,
+              allowSegResize,
+              loopPracticeScope,
+              phraseHasSegForRegions,
+            );
           }
         });
 
@@ -1265,10 +1321,25 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       const isEditing = phraseWaveResizeEnabled;
       const isActive = loop.id === activeLoopId && !isEditing;
       const allowResize = phraseWaveResizeEnabled;
+      const { start: phraseStart, end: phraseEnd } = normalizeWaveSurferRegionBounds({
+        startRaw: loop.start,
+        endRaw: loop.end,
+        trackDuration: trackDur,
+      });
+      if (process.env.NODE_ENV === "development") {
+        console.log("[Woodshed ws region] phrase addRegion", {
+          phraseId: loop.id,
+          phraseName: loop.name,
+          start: phraseStart,
+          end: phraseEnd,
+          duration: trackDur,
+          raw: { start: loop.start, end: loop.end },
+        });
+      }
       const region = regions.addRegion({
         id: loop.id,
-        start: loop.start,
-        end: loop.end,
+        start: phraseStart,
+        end: phraseEnd,
         /**
          * Three visual tiers, in order of emphasis:
          *   editing  — calm violet wash, bright edges + handles (CSS owns the edge frame)
@@ -1276,11 +1347,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
          *   locked   — barely-there slate: still selectable, never editable
          * Fill opacities stay low so the waveform is always the hero.
          */
-        color: isEditing
-          ? "rgba(210, 198, 255, 0.30)"
-          : isActive
-            ? "rgba(196, 181, 253, 0.10)"
-            : "rgba(100,116,139,0.10)",
+        color: phraseRegionWaveColor(
+          isEditing ? "editing" : isActive ? "active" : "locked",
+          isMobilePractice,
+          loopPracticeScope === "phrase" || !phraseHasSegForRegions,
+        ),
         /** Match focus regions: resize handles only (no whole-phrase drag). */
         drag: false,
         resize: allowResize,
@@ -1310,6 +1381,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             ? "woodshed-region-active"
             : "woodshed-region-locked";
         el.classList.add(className);
+        applyPhraseRegionVisuals(
+          el,
+          isEditing ? "editing" : isActive ? "active" : "locked",
+          isMobilePractice,
+          loopPracticeScope,
+          phraseHasSegForRegions,
+        );
         if (isMobilePractice) {
           el.style.pointerEvents = "none";
         } else if (allowResize) {
@@ -1418,6 +1496,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     mobileFocusChipSelectedId,
     focusRegionWaveformEditUnlockedById,
     phraseWaveformEditUnlockedById,
+    loopPracticeScope,
   ]);
 
   useEffect(() => {
