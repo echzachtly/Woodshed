@@ -85,6 +85,8 @@ import {
   normalizeMediaSourceFromStoredProject,
   persistMediaSourceForDexieRow,
 } from "@/lib/woodshed-media-source";
+import { NEUTRAL_TIMELINE_PROTOTYPE_ENABLED } from "@/components/neutral-timeline/constants";
+import { NeutralTimelinePrototype } from "@/components/neutral-timeline/neutral-timeline-prototype";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
@@ -2314,6 +2316,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     );
   }, [getPlaybackSurface]);
 
+  const handleNeutralTimelineSeek = useCallback(
+    (sec: number) => {
+      useWoodshedStore.getState().exitPhraseFitAfterUserNavigation();
+      getPlaybackSurface()?.seek(sec);
+      useWoodshedStore.getState().setCurrentTime(sec);
+    },
+    [getPlaybackSurface],
+  );
+
+  const handleNeutralTimelinePxPerSec = useCallback((next: number) => {
+    useWoodshedStore.getState().exitPhraseFitAfterUserNavigation();
+    useWoodshedStore.getState().setMinPxPerSec(next);
+  }, []);
+
   const handleResetTempo100 = useCallback(() => {
     handleTransportTempo(100);
   }, [handleTransportTempo]);
@@ -2569,6 +2585,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                 setWaveNormalizedScroll(wavesurferRef.current, ratio);
               }}
               onFitAll={handleResetZoomFullSong}
+            />
+          ) : null}
+          {NEUTRAL_TIMELINE_PROTOTYPE_ENABLED &&
+          !isMobilePractice &&
+          !showEmptyWorkspace ? (
+            <NeutralTimelinePrototype
+              duration={duration}
+              currentTime={currentTime}
+              loops={loops}
+              activeLoopId={activeLoopId}
+              activeSegmentId={activeSegmentId}
+              pxPerSec={minPxPerSec}
+              onPxPerSecChange={handleNeutralTimelinePxPerSec}
+              onSeek={handleNeutralTimelineSeek}
             />
           ) : null}
           {!isMobilePractice ? (
