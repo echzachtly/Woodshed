@@ -11,6 +11,10 @@ import {
   type PracticeLoop,
 } from "@/lib/loop-engine";
 import { nanoid } from "@/lib/id";
+import {
+  DEFAULT_UPLOAD_MEDIA_SOURCE,
+  type WoodshedMediaSource,
+} from "@/lib/woodshed-media-source";
 
 /**
  * Waveform viewport intent (WaveSurfer `autoScroll` / `autoCenter` still follow
@@ -88,12 +92,25 @@ export type WoodshedState = {
    * without preserving edit. Not persisted in project files.
    */
   phraseWaveformEditUnlockedById: Record<string, true>;
+  /**
+   * Phase 2 — where session audio originates (`upload` today).
+   * Future sources (e.g. YouTube) branch UI/persistence without changing loop semantics.
+   */
+  mediaSource: WoodshedMediaSource;
 };
 
 type WoodshedActions = {
   resetWorkspace: () => void;
   bootstrapFromDuration: (duration: number) => void;
-  setProjectMeta: (id: string | null, name: string) => void;
+  /**
+   * Updates project id/name; optional `mediaSource` replaces source only when passed.
+   * (Avoid clearing mediaSource when callers only rename / swap cloud id.)
+   */
+  setProjectMeta: (
+    id: string | null,
+    name: string,
+    mediaSource?: WoodshedMediaSource,
+  ) => void;
   setDuration: (duration: number) => void;
   setPlaying: (flag: boolean) => void;
   setCurrentTime: (t: number) => void;
@@ -216,6 +233,7 @@ const initialState: WoodshedState = {
   lastPracticeSegmentIdByPhrase: {},
   focusRegionWaveformEditUnlockedById: {},
   phraseWaveformEditUnlockedById: {},
+  mediaSource: { ...DEFAULT_UPLOAD_MEDIA_SOURCE },
 };
 
 function clampUi(value: number, lo: number, hi: number) {
@@ -248,7 +266,12 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       loopFocusTick: state.loopFocusTick + 1,
     }));
   },
-  setProjectMeta: (projectId, projectName) => set({ projectId, projectName }),
+  setProjectMeta: (projectId, projectName, mediaSource) =>
+    set((state) => ({
+      projectId,
+      projectName,
+      ...(mediaSource !== undefined ? { mediaSource } : {}),
+    })),
   setDuration: (duration) => set({ duration }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentTime: (currentTime) => set({ currentTime }),

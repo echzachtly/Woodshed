@@ -80,6 +80,11 @@ import {
   capturePracticeStatePersistV1,
   normalizePracticeStatePersistV1,
 } from "@/lib/practice-state-persist";
+import {
+  DEFAULT_UPLOAD_MEDIA_SOURCE,
+  normalizeMediaSourceFromStoredProject,
+  persistMediaSourceForDexieRow,
+} from "@/lib/woodshed-media-source";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
@@ -1167,7 +1172,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         const pending = pendingHydration.current;
         const demo = pendingDemoHydrationRef.current;
         if (pending) {
-          state.setProjectMeta(pending.id, pending.name);
+          state.setProjectMeta(
+            pending.id,
+            pending.name,
+            normalizeMediaSourceFromStoredProject(pending),
+          );
           state.upsertLoops(pending.loops);
           if (
             pending.activeLoopId &&
@@ -1192,7 +1201,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           pendingHydration.current = null;
         } else if (demo) {
           const loops = demoRowsToPracticeLoops(demo.loopRows, dur);
-          state.setProjectMeta(demo.projectId, demo.title);
+          state.setProjectMeta(demo.projectId, demo.title, {
+            ...DEFAULT_UPLOAD_MEDIA_SOURCE,
+          });
           state.upsertLoops(loops);
           const active =
             demo.activeLoopId &&
@@ -1831,7 +1842,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         blob instanceof File
           ? formatFilenameAsProjectName(blob.name)
           : "Woodshed session";
-      useWoodshedStore.getState().setProjectMeta(nanoid(), displayName);
+      const uploadMediaSource =
+        blob instanceof File
+          ? {
+              kind: "upload" as const,
+              blobId: null,
+              fileName: blob.name,
+              mimeType: blob.type || null,
+            }
+          : { ...DEFAULT_UPLOAD_MEDIA_SOURCE };
+      useWoodshedStore
+        .getState()
+        .setProjectMeta(nanoid(), displayName, uploadMediaSource);
       await listProjects().then(setProjectsList);
     } catch {
       devError("Failed to load waveform");
@@ -2042,6 +2064,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     setSaveStatusTone("progress");
     try {
       const pid = snapshot.projectId ?? nanoid();
+      const persistedMedia = persistMediaSourceForDexieRow({
+        source: snapshot.mediaSource,
+        resolvedBlobId: pid,
+      });
       await saveBlobRecord(pid, audioBlobRef.current, "audio");
       await saveDexieProject({
         id: pid,
@@ -2049,6 +2075,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         loops: snapshot.loops,
         activeLoopId: snapshot.activeLoopId,
         blobId: pid,
+        mediaSource: persistedMedia,
         practiceStateV1: capturePracticeStatePersistV1({
           loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
           loopPracticeScope: snapshot.loopPracticeScope,
@@ -2057,7 +2084,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             snapshot.lastPracticeSegmentIdByPhrase,
         }),
       });
-      useWoodshedStore.getState().setProjectMeta(pid, snapshot.projectName);
+      useWoodshedStore
+        .getState()
+        .setProjectMeta(pid, snapshot.projectName, persistedMedia);
       await listProjects().then(setProjectsList);
       setSaveStatusMessage("Saved locally");
       setSaveStatusTone("success");

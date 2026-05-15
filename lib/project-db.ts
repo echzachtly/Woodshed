@@ -2,6 +2,7 @@ import Dexie, { type Table } from "dexie";
 
 import type { PracticeLoop } from "@/lib/loop-engine";
 import type { PracticeStatePersistV1 } from "@/lib/practice-state-persist";
+import type { WoodshedMediaSource } from "@/lib/woodshed-media-source";
 
 export type StoredProjectMeta = {
   id: string;
@@ -13,6 +14,11 @@ export type StoredProjectMeta = {
   blobId?: string | null;
   /** Saved loop mode / focus selection (optional for older saves). */
   practiceStateV1?: PracticeStatePersistV1 | null;
+  /**
+   * Phase 2 — playback origin discriminator (Dexie).
+   * Omitted on legacy rows → normalized to `{ kind: \"upload\", blobId }` at load time.
+   */
+  mediaSource?: WoodshedMediaSource | null;
 };
 
 export class WoodshedDexie extends Dexie {
