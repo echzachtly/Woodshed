@@ -659,6 +659,16 @@ body {
   cursor: ew-resize;
 }
 
+/** M2: mobile Edit Mode — larger touch targets for Practice Section boundary handles. */
+[data-mobile-edit-mode="true"]
+  [data-testid="primary-waveform"]
+  .woodshed-region-editing
+  [part*="region-handle"] {
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: none;
+}
+
 /**
  * Dev/debug only visual cue for phrase handles.
  * Toggled by `data-phrase-handle-debug="true"` in workspace runtime diagnostics.

@@ -2,6 +2,8 @@
 
 This document explains how Woodshed works **under the hood**, in plain language, for anyone who wants to understand the product without reading every line of code.
 
+**Canonical user-facing vocabulary:** see **`docs/TERMINOLOGY_GLOSSARY.md`** (Practice Section ↔ `PracticeLoop`, Focus Loop ↔ `PhraseSegment`, etc.). Sections below often still say **phrase** where the code/Zustand field names match historical naming—they will align with that glossary gradually.
+
 ---
 
 ## 1. Playback architecture

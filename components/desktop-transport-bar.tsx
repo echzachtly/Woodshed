@@ -43,6 +43,8 @@ export type DesktopTransportBarProps = {
   onCycleLoopPlaybackMode: () => void;
   onTempoSlider: (pct: number) => void;
   formatTime: (t: number) => string;
+  /** Decoded timeline not ready — quieter idle transport (no playback yet). */
+  timelineIdle?: boolean;
 };
 
 export const DesktopTransportBar = memo(function DesktopTransportBar(
@@ -68,6 +70,7 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
     onCycleLoopPlaybackMode,
     onTempoSlider,
     formatTime,
+    timelineIdle = false,
   } = props;
 
   const editingPhrase = Boolean(
@@ -107,9 +110,12 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
 
   const playbackCluster = (
     <div
-      className="flex items-center gap-1.5 rounded-xl border border-stone-800/60 bg-stone-950/50 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+      className={cn(
+        "flex items-center gap-1.5 rounded-xl border border-stone-800/60 bg-stone-950/50 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]",
+        timelineIdle && "border-stone-800/40 bg-stone-950/35 shadow-none",
+      )}
       role="group"
-      aria-label="Playback and replay"
+      aria-label={timelineIdle ? "Playback (idle)" : "Playback and replay"}
     >
       <button
         type="button"
@@ -117,25 +123,30 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
           "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-stone-200 shadow-sm shadow-black/35 transition-colors",
           "border-stone-600/75 bg-stone-900/90 hover:border-violet-500/35 hover:bg-stone-800/90 hover:text-violet-100",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-500/50",
-          !hasActivePhrase && "opacity-40",
+          (!hasActivePhrase || timelineIdle) && "opacity-40",
+          timelineIdle &&
+            "pointer-events-none border-stone-800/60 bg-stone-950/50 text-stone-600 shadow-none",
         )}
         aria-label={restartHelp}
-        title={restartHelp}
-        disabled={!hasActivePhrase}
+        title={timelineIdle ? "Available after loading audio" : restartHelp}
+        disabled={!hasActivePhrase || timelineIdle}
         onClick={onRestartLoop}
       >
         <RotateCcw className="h-4 w-4" strokeWidth={2} aria-hidden />
       </button>
       <Button
         variant={isPlaying ? "secondary" : "default"}
-        aria-label={isPlaying ? "Pause" : "Play"}
+        aria-label={timelineIdle ? "Play — waiting for audio" : isPlaying ? "Pause" : "Play"}
         type="button"
         size="icon"
+        disabled={timelineIdle}
         className={cn(
           "h-11 w-11 shrink-0 rounded-full border shadow-md shadow-black/45",
           isPlaying
             ? "border-stone-600/80 bg-stone-800 text-stone-50"
             : "border-violet-400/35 bg-violet-600 text-white hover:bg-violet-500",
+          timelineIdle &&
+            "pointer-events-none border-stone-800/65 bg-stone-950/60 text-stone-600 opacity-65 shadow-none",
         )}
         onClick={onTogglePlay}
       >
@@ -150,20 +161,35 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
 
   return (
     <div
-      className="relative grid w-full min-w-0 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-t border-stone-800/60 bg-[#060504] px-2 py-1.5 sm:px-2.5"
+      className={cn(
+        "relative grid w-full min-w-0 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-t px-2 py-1.5 sm:px-2.5",
+        timelineIdle
+          ? "border-stone-900/65 bg-[#070605]/95"
+          : "border-stone-800/60 bg-[#060504]",
+      )}
       aria-label="Transport"
     >
       <div className="flex min-w-0 items-center gap-2 justify-self-start">
         <span
           className={cn(
             "font-mono text-[11px] tabular-nums tracking-tight",
-            duration ? "text-stone-400" : "text-stone-600",
+            timelineIdle
+              ? "text-stone-600"
+              : duration
+                ? "text-stone-400"
+                : "text-stone-600",
           )}
-          aria-label="Current time over total duration"
+          aria-label={
+            timelineIdle
+              ? "Position — idle until audio is loaded"
+              : "Current time over total duration"
+          }
         >
-          {formatTime(currentTime)} / {formatTime(duration)}
+          {timelineIdle
+            ? "— · —"
+            : `${formatTime(currentTime)} / ${formatTime(duration)}`}
         </span>
-        {loopPlaybackEnabled ? (
+        {!timelineIdle && loopPlaybackEnabled ? (
           <span className="hidden max-w-[8rem] truncate text-[10px] font-medium text-violet-300/90 sm:inline">
             {loopCurrent}
           </span>
@@ -177,17 +203,29 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
           type="button"
           className={cn(
             "inline-flex h-8 max-w-[10rem] shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors sm:max-w-[12rem] sm:px-2.5",
-            loopPlaybackEnabled
-              ? "border-violet-500/40 bg-violet-500/10 text-violet-100"
-              : "border-stone-700/70 bg-stone-950/40 text-stone-500 hover:border-stone-600 hover:bg-stone-900/50 hover:text-stone-300",
+            timelineIdle &&
+              "pointer-events-none border-stone-800/60 bg-stone-950/50 text-stone-600 opacity-70",
+            !timelineIdle &&
+              (loopPlaybackEnabled
+                ? "border-violet-500/40 bg-violet-500/10 text-violet-100"
+                : "border-stone-700/70 bg-stone-950/40 text-stone-500 hover:border-stone-600 hover:bg-stone-900/50 hover:text-stone-300"),
           )}
-          aria-label={loopAriaLabel}
-          title={loopTooltip}
-          disabled={!loopPlaybackEnabled && !canEnableLoopPlayback}
+          aria-label={
+            timelineIdle ? "Repeat mode — idle until audio is loaded" : loopAriaLabel
+          }
+          title={
+            timelineIdle ? "Available after loading audio" : loopTooltip
+          }
+          disabled={
+            timelineIdle ||
+            (!loopPlaybackEnabled && !canEnableLoopPlayback)
+          }
           onClick={onCycleLoopPlaybackMode}
         >
           <Repeat className="h-3 w-3 shrink-0" strokeWidth={2} aria-hidden />
-          <span className="truncate">{loopCurrent}</span>
+          <span className="truncate">
+            {timelineIdle ? "—" : loopCurrent}
+          </span>
         </button>
 
         <Button
@@ -197,7 +235,7 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
             "h-8 w-8 p-0 text-stone-500 hover:text-stone-200",
             editingPhrase && "text-amber-100/95 hover:text-amber-50",
           )}
-          disabled={!hasActivePhrase}
+          disabled={!hasActivePhrase || timelineIdle}
           aria-label={editTitle}
           title={editTitle}
           onClick={onToggleEditContext}
@@ -212,7 +250,7 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
           variant="ghost"
           type="button"
           className="h-8 w-8 p-0 text-stone-500 hover:text-red-300/90"
-          disabled={!hasActivePhrase}
+          disabled={!hasActivePhrase || timelineIdle}
           aria-label={deleteTitle}
           title={deleteTitle}
           onClick={onDeleteContext}
@@ -221,24 +259,34 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
         </Button>
 
         <div
-          className="ml-0.5 hidden items-center gap-2 border-l border-stone-800/55 pl-2 sm:flex"
+          className={cn(
+            "ml-0.5 hidden items-center gap-2 border-l pl-2 sm:flex",
+            timelineIdle ? "border-stone-900/70" : "border-stone-800/55",
+          )}
           role="group"
           aria-label="Practice speed"
         >
-          <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-stone-500">
+          <span
+            className={cn(
+              "text-[9px] font-semibold uppercase tracking-[0.16em]",
+              timelineIdle ? "text-stone-700" : "text-stone-500",
+            )}
+          >
             Speed
           </span>
           <TempoPillPicker
             tempoPercent={tempoPercent}
             onSetPercent={onTempoSlider}
+            disabled={timelineIdle}
             className="relative w-[min(100%,7.5rem)] shrink-0"
           />
         </div>
 
-        <div className="sm:hidden">
+        <div className={cn("sm:hidden", timelineIdle && "opacity-80")}>
           <TempoPillPicker
             tempoPercent={tempoPercent}
             onSetPercent={onTempoSlider}
+            disabled={timelineIdle}
             className="relative w-[5.5rem] shrink-0"
           />
         </div>

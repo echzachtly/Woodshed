@@ -1,6 +1,6 @@
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 
-export type LoopModeDisplay = "Focus Loop" | "Loop Phrase" | "Play Through";
+export type LoopModeDisplay = "Focus Loop" | "Loop Section" | "Play Through";
 
 export function getLoopModeDisplay(
   loopPlaybackEnabled: boolean,
@@ -14,7 +14,7 @@ export function getLoopModeDisplay(
   ) {
     return "Focus Loop";
   }
-  return "Loop Phrase";
+  return "Loop Section";
 }
 
 export function getNextLoopModeDisplay(
@@ -23,9 +23,9 @@ export function getNextLoopModeDisplay(
   phraseHasFocusRegions: boolean,
 ): LoopModeDisplay {
   if (!phraseHasFocusRegions) {
-    return loopPlaybackEnabled ? "Play Through" : "Loop Phrase";
+    return loopPlaybackEnabled ? "Play Through" : "Loop Section";
   }
-  if (!loopPlaybackEnabled) return "Loop Phrase";
+  if (!loopPlaybackEnabled) return "Loop Section";
   if (loopPracticeScope === "phrase") return "Focus Loop";
   return "Play Through";
 }
@@ -33,13 +33,27 @@ export function getNextLoopModeDisplay(
 /** Short copy for tooltips / aria (current mode). */
 export function getLoopModeDescription(mode: LoopModeDisplay): string {
   switch (mode) {
-    case "Loop Phrase":
-      return "Loop current phrase";
+    case "Loop Section":
+      return "Loop current Practice Section";
     case "Focus Loop":
-      return "Loop active focus region";
+      return "Loop active Focus Loop";
     case "Play Through":
       return "Play through song";
     default:
       return mode;
+  }
+}
+
+/** Accessible descriptions for mobile tooltips / aria. */
+export function describeLoopModeForMobile(mode: LoopModeDisplay): string {
+  switch (mode) {
+    case "Loop Section":
+      return "Repeat playback within the current Practice Section";
+    case "Focus Loop":
+      return "Repeat playback within the selected Focus Loop";
+    case "Play Through":
+      return "Play through without looping a span";
+    default:
+      return getLoopModeDescription(mode);
   }
 }

@@ -113,7 +113,8 @@ type WoodshedActions = {
    */
   exitPhraseFitAfterUserNavigation: () => void;
   upsertLoops: (loops: PracticeLoop[]) => void;
-  addLoopCandidate: () => void;
+  /** Optional name for mobile / future callers; default `Section N`. */
+  addLoopCandidate: (nameOverride?: string) => void;
   addLoopAround: (
     mid: number,
     halfWidthSec?: number,
@@ -332,7 +333,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       focusRegionWaveformEditUnlockedById: {},
       phraseWaveformEditUnlockedById: {},
     }),
-  addLoopCandidate: () => {
+  addLoopCandidate: (nameOverride) => {
     const { duration, loops, activeLoopId } = get();
     if (!duration) return;
     const active = loops.find((l) => l.id === activeLoopId);
@@ -343,7 +344,12 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       ? clampTime(active.end, duration)
       : Math.min(Math.max(0, duration - span), duration * 0.5);
     const end = Math.min(duration, start + span);
-    const created = loopFromBounds(start, end, duration, `Section ${loops.length + 1}`);
+    const defaultName = `Section ${loops.length + 1}`;
+    const label =
+      typeof nameOverride === "string" && nameOverride.trim()
+        ? nameOverride.trim()
+        : defaultName;
+    const created = loopFromBounds(start, end, duration, label);
     set((state) => ({
       loops: [...loops, created],
       activeLoopId: created.id,

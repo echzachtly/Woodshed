@@ -16,6 +16,12 @@ import WaveSurfer from "wavesurfer.js";
 import { DesktopHeaderBar } from "@/components/desktop-header-bar";
 import { DesktopInspectorPanel } from "@/components/desktop-inspector-panel";
 import { DesktopTransportBar } from "@/components/desktop-transport-bar";
+import {
+  DesktopPostFocusLoopHintStripe,
+  DesktopShiftFocusGuidanceStripe,
+} from "@/components/onboarding/desktop-waveform-onboarding";
+import { DemoProjectOrientationRibbon } from "@/components/onboarding/demo-project-orientation-ribbon";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 import { useAuth } from "@/components/auth-provider";
 import {
   MobilePracticeControls,
@@ -99,6 +105,13 @@ import {
 import { isWaveSurferAudioDecoded } from "@/lib/wavesurfer-audio-ready";
 import { reflowWaveSurferForContainer } from "@/lib/wavesurfer-reflow";
 import { applyWheelZoomAnchoredToCursor } from "@/lib/waveform-cursor-zoom";
+import {
+  DESKTOP_ONBOARDING_UPDATED_EVENT,
+  markDesktopFocusLoopCreatedByUser,
+} from "@/lib/onboarding/desktop-milestones";
+import { markDemoOrientationDismissed } from "@/lib/onboarding/demo-orientation";
+import { loadOnboardingDocument } from "@/lib/onboarding/storage";
+import { desktopShowShiftFocusCreationGuidance } from "@/lib/onboarding/triggers";
 import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
 import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
 import { installShiftWaveformAuthoringGesture } from "@/lib/shift-waveform-authoring-gesture";
@@ -236,7 +249,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const audioBlobRef = useRef<Blob | null>(null);
   const pendingHydration = useRef<StoredProjectMeta | null>(null);
   const pendingDemoHydrationRef = useRef<PendingDemoHydration | null>(null);
-  const demoInitialLoadDoneRef = useRef(false);
   const loopsSignature = useRef<string>("");
   const wheelBound = useRef(false);
   /** Ignore scroll events briefly after programmatic phrase-fit (avoids fighting `phrase-focus`). */
@@ -258,6 +270,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const phraseHandleDiagCleanupRef = useRef<(() => void) | null>(null);
 
   const [projects, setProjectsList] = useState<StoredProjectMeta[]>([]);
+  /** First Dexie listing finished (empty list ≠ still loading). */
+  const [dexieProjectsListed, setDexieProjectsListed] = useState(false);
+  /** Cloud summaries fetched at least once when cloud sessions apply; irrelevant when logged out. */
+  const [cloudPickerListed, setCloudPickerListed] = useState(false);
   const [demoPickerTitle, setDemoPickerTitle] = useState(
     DEMO_PROJECT_DISPLAY_FALLBACK,
   );
@@ -267,6 +283,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     startRatio: 0,
     durationRatio: 1,
   });
+  /** True while an audio timeline load is expected before decode clears it (covers `duration === 0` gap during `ws.load`). */
+  const [audioTimelineLoading, setAudioTimelineLoading] = useState(false);
+  /** Increment so header / mobile sheets open the Projects picker for empty workspace CTA. */
+  const [projectPickerOpenSignal, setProjectPickerOpenSignal] = useState(0);
 
   const {
     projectName,
@@ -329,6 +349,26 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const isMobilePractice = useMediaQuery("(max-width: 768px)");
   mobilePracticeModeRef.current = isMobilePractice;
 
+  const [desktopFocusAuthoringComplete, setDesktopFocusAuthoringComplete] =
+    useState(
+      () => loadOnboardingDocument().desktop.focusLoopAuthoringComplete,
+    );
+  /** One brief line after first authored Focus Loop (desktop Phase 3). */
+  const [desktopPostFocusCreationHint, setDesktopPostFocusCreationHint] =
+    useState(false);
+
+  const [demoOrientationSeen, setDemoOrientationSeen] = useState(
+    () => loadOnboardingDocument().desktop.demoOrientationSeen,
+  );
+
+  /** Mobile M1 posture — ephemeral, cleared on workspace switches (not persisted). */
+  const [mobileEditModeActive, setMobileEditModeActive] = useState(false);
+
+  const dismissDemoOrientation = useCallback(() => {
+    markDemoOrientationDismissed();
+    setDemoOrientationSeen(true);
+  }, []);
+
   const desktopBottomStackPxRef = useRef(desktopBottomStackPx);
   desktopBottomStackPxRef.current = desktopBottomStackPx;
 
@@ -390,6 +430,53 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       ro.disconnect();
     };
   }, [isMobilePractice, desktopBottomStackPx]);
+
+  useEffect(() => {
+    setMobileEditModeActive(false);
+    if (projectId !== DEMO_PROJECT_ID) return;
+    setDemoOrientationSeen(loadOnboardingDocument().desktop.demoOrientationSeen);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!isMobilePractice) setMobileEditModeActive(false);
+  }, [isMobilePractice]);
+
+  useEffect(() => {
+    const onUpd = (e: Event) => {
+      const evt = e as CustomEvent<{
+        transitionedToComplete?: boolean;
+      }>;
+      setDesktopFocusAuthoringComplete(
+        loadOnboardingDocument().desktop.focusLoopAuthoringComplete,
+      );
+      if (evt.detail?.transitionedToComplete && !mobilePracticeModeRef.current) {
+        setDesktopPostFocusCreationHint(true);
+      }
+    };
+    window.addEventListener(DESKTOP_ONBOARDING_UPDATED_EVENT, onUpd);
+    return () =>
+      window.removeEventListener(DESKTOP_ONBOARDING_UPDATED_EVENT, onUpd);
+  }, []);
+
+  useEffect(() => {
+    if (!desktopPostFocusCreationHint) return;
+    const timer = window.setTimeout(
+      () => setDesktopPostFocusCreationHint(false),
+      11_000,
+    );
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setDesktopPostFocusCreationHint(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [desktopPostFocusCreationHint]);
+
+  useEffect(() => {
+    if (isMobilePractice) setDesktopPostFocusCreationHint(false);
+  }, [isMobilePractice]);
 
   const onDesktopBottomResizePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -567,7 +654,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, []);
 
   useEffect(() => {
-    listProjects().then(setProjectsList).catch(() => undefined);
+    listProjects()
+      .then(setProjectsList)
+      .catch(() => undefined)
+      .finally(() => setDexieProjectsListed(true));
   }, []);
 
   useEffect(() => {
@@ -620,8 +710,22 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, [supabase]);
 
   useEffect(() => {
-    void refreshCloudProjects();
-  }, [refreshCloudProjects, cloudSessionUserId]);
+    const needsCloudPickers =
+      isSupabaseConfigured() && Boolean(supabase && cloudSessionUserId);
+    if (!needsCloudPickers) {
+      setCloudPickerListed(true);
+      void refreshCloudProjects();
+      return;
+    }
+    setCloudPickerListed(false);
+    let cancelled = false;
+    void refreshCloudProjects().finally(() => {
+      if (!cancelled) setCloudPickerListed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshCloudProjects, cloudSessionUserId, supabase]);
 
   useEffect(() => {
     void fetch(DEMO_PROJECT_JSON_PATH, { cache: "no-store" })
@@ -703,13 +807,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     [activeLoopId],
   );
 
-  const loadBuiltInDemoProjectRef = useRef<() => Promise<boolean>>(
-    async () => false,
-  );
-
   const loadBuiltInDemoProject = useCallback(async (): Promise<boolean> => {
     const ws = wavesurferRef.current;
     if (!ws) return false;
+    setMobileEditModeActive(false);
     pendingHydration.current = null;
     pendingDemoHydrationRef.current = null;
     try {
@@ -719,6 +820,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       const parsed = parseDemoProjectFile(raw);
       if (!parsed) return false;
       const audioBlob = await resolveDemoAudioBlob(parsed.audioUrl);
+      setAudioTimelineLoading(true);
       useWoodshedStore.getState().resetWorkspace();
       pendingDemoHydrationRef.current = parsed;
       audioBlobRef.current = audioBlob;
@@ -726,17 +828,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       await primeWaveformCaches(audioBlob);
       if (pendingHydration.current) {
         pendingDemoHydrationRef.current = null;
+        setAudioTimelineLoading(false);
         return false;
       }
       await ws.load(URL.createObjectURL(audioBlob));
       return true;
     } catch {
       devWarn("Built-in demo could not be loaded");
+      setAudioTimelineLoading(false);
       return false;
     }
   }, [primeWaveformCaches]);
-
-  loadBuiltInDemoProjectRef.current = loadBuiltInDemoProject;
 
   useEffect(() => {
     let destroyed = false;
@@ -909,6 +1011,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                 endSec,
               });
               if (!r) return null;
+              markDesktopFocusLoopCreatedByUser();
               st.setCurrentTime(r.seekTo);
               return r;
             }
@@ -1090,23 +1193,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         }
       });
 
-      const tryLoadBuiltInDemo = async () => {
-        if (demoInitialLoadDoneRef.current) return;
-        if (destroyed) return;
-        const wsLocal = wavesurferRef.current;
-        if (!wsLocal) return;
-        if (audioBlobRef.current) return;
-        if (pendingHydration.current) return;
-
-        demoInitialLoadDoneRef.current = true;
-
-        const ok = await loadBuiltInDemoProjectRef.current();
-        if (!ok) {
-          demoInitialLoadDoneRef.current = false;
-        }
-      };
-
-      void tryLoadBuiltInDemo();
+      /**
+       * Built-in demo is **never** loaded on WaveSurfer init.
+       * Users open it explicitly (session picker → demo id, etc.).
+       * @see docs/APPLICATION_STATE_MODEL.md • docs/ONBOARDING_STRATEGY.md
+       */
 
       updateViewport();
     })();
@@ -1147,11 +1238,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     ws.zoom(minPxPerSec);
   }, [minPxPerSec]);
 
-  /** Mobile: drag-to-seek off while repeating (tap-to-seek only) to reduce accidental scrub; softer drag when play-through. */
+  /** Mobile: drag-to-seek off while repeating; off while Edit Mode (M2 phrase refinement); softer drag in play-through. */
   useEffect(() => {
     const ws = wavesurferRef.current;
     if (!ws) return;
     if (!isMobilePractice) {
+      ws.setOptions({ dragToSeek: false });
+      return;
+    }
+    if (mobileEditModeActive) {
       ws.setOptions({ dragToSeek: false });
       return;
     }
@@ -1160,7 +1255,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       return;
     }
     ws.setOptions({ dragToSeek: { debounceTime: 280 } });
-  }, [isMobilePractice, loopPlaybackEnabled]);
+  }, [isMobilePractice, loopPlaybackEnabled, mobileEditModeActive]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;
@@ -1246,17 +1341,25 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const phraseWaveUnlocked = Boolean(
       renderedLoop && phraseWaveformEditUnlockedById[renderedLoop.id],
     );
+    /** M2: Edit Mode — refine selected Practice Section bounds on the waveform (mobile only). */
+    const mobilePhraseRefine = Boolean(
+      isMobilePractice && mobileEditModeActive && renderedLoop,
+    );
     /**
      * Desktop phrase waveform resize handles whenever the inspector unlocks phrase
      * boundaries — independent of `regionContextActive`. Previously we tied handles to
      * `!regionContextActive`, which made resize impossible whenever a focus segment
      * was selected (the common case while editing focus regions). Stacking + CSS
      * (`pointer-events` on `.woodshed-region-editing`) keep segment clicks usable.
+     *
+     * Mobile: resize when Edit Mode is on for the active (rendered) Practice Section.
      */
     const phraseWaveResizeEnabled =
-      phraseWaveUnlocked && !isMobilePractice;
+      Boolean(phraseWaveUnlocked && !isMobilePractice) || mobilePhraseRefine;
     const phraseHandleDiagActive =
-      phraseWaveResizeEnabled && phraseHandleDiagnosticsEnabled();
+      phraseWaveResizeEnabled &&
+      phraseHandleDiagnosticsEnabled() &&
+      !isMobilePractice;
     if (containerRef.current) {
       if (phraseHandleDiagActive) {
         containerRef.current.dataset.phraseHandleDebug = "true";
@@ -1270,7 +1373,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
      * See `lib/wavesurfer-regions-virtual-append-phrase-pin.ts`.
      */
     setActivePhraseRegionVirtualAppendPin({
-      pinActive: Boolean(renderedLoop && phraseWaveUnlocked && !isMobilePractice),
+      pinActive: Boolean(
+        renderedLoop &&
+          ((phraseWaveUnlocked && !isMobilePractice) ||
+            (isMobilePractice && mobileEditModeActive)),
+      ),
       pinnedLoopId: renderedLoop?.id ?? null,
     });
     if (process.env.NODE_ENV === "development" && renderedLoop) {
@@ -1285,8 +1392,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const signature = renderedLoop
       ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|ph:${
           phraseWaveResizeEnabled ? "edit" : "lock"
-        }|m:${isMobilePractice ? "1" : "0"}|lp:${loopPracticeScope}|seg:${segSig}|segU:${segUnlockSig}|sel:${mobileFocusChipSelectedId ?? ""}`
-      : `empty|m:${isMobilePractice ? "1" : "0"}|lp:${loopPracticeScope}`;
+        }|m:${isMobilePractice ? "1" : "0"}|e:${mobileEditModeActive ? "1" : "0"}|lp:${loopPracticeScope}|seg:${segSig}|segU:${segUnlockSig}|sel:${mobileFocusChipSelectedId ?? ""}`
+      : `empty|m:${isMobilePractice ? "1" : "0"}|e:${mobileEditModeActive ? "1" : "0"}|lp:${loopPracticeScope}`;
     if (signature === loopsSignature.current) {
       return;
     }
@@ -1320,6 +1427,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         handle.style.pointerEvents = "auto";
         handle.style.cursor = "ew-resize";
         handle.style.zIndex = "3";
+      }
+    };
+    const applyMobilePhraseHandleTouchSizing = (el: HTMLElement) => {
+      const handles = Array.from(
+        el.querySelectorAll('[part*="region-handle"]'),
+      ).filter((n): n is HTMLElement => n instanceof HTMLElement);
+      for (const handle of handles) {
+        handle.style.minWidth = "44px";
+        handle.style.minHeight = "44px";
+        handle.style.touchAction = "none";
       }
     };
     let focusProbeLogged = false;
@@ -1524,12 +1641,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           loopPracticeScope,
           phraseHasSegForRegions,
         );
-        if (isMobilePractice) {
+        if (isMobilePractice && !mobilePhraseRefine) {
           el.style.pointerEvents = "none";
         } else if (allowResize) {
           /** Keep phrase body pass-through while leaving handles interactive. */
           el.style.pointerEvents = "none";
           applyPhraseHandleInteractivity(el);
+          if (mobilePhraseRefine) {
+            applyMobilePhraseHandleTouchSizing(el);
+          }
         } else {
           el.style.pointerEvents = "";
         }
@@ -1538,6 +1658,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       if (!isMobilePractice) {
         region.on("click", () => {
           useWoodshedStore.getState().selectLoop(loop.id);
+        });
+      }
+
+      if (mobilePhraseRefine) {
+        region.on("update", () => {
+          const st = useWoodshedStore.getState();
+          if (!st.isPlaying) return;
+          const w = wavesurferRef.current;
+          w?.pause();
+          st.setPlaying(false);
         });
       }
 
@@ -1628,6 +1758,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     loops,
     activeLoopId,
     isMobilePractice,
+    mobileEditModeActive,
     activeSegmentId,
     regionContextActive,
     mobileFocusChipSelectedId,
@@ -1651,8 +1782,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const ws = wavesurferRef.current;
     if (!ws) return;
 
+    setMobileEditModeActive(false);
+    setAudioTimelineLoading(true);
     pendingDemoHydrationRef.current = null;
-    demoInitialLoadDoneRef.current = true;
 
     useWoodshedStore.getState().resetWorkspace();
     audioBlobRef.current =
@@ -1672,6 +1804,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       await listProjects().then(setProjectsList);
     } catch {
       devError("Failed to load waveform");
+      setAudioTimelineLoading(false);
     }
   }, [primeWaveformCaches]);
 
@@ -1700,10 +1833,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     async (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => {
       const ws = wavesurferRef.current;
       if (!ws) return;
+      setMobileEditModeActive(false);
       pendingDemoHydrationRef.current = null;
-      demoInitialLoadDoneRef.current = true;
-      pendingHydration.current = meta;
-      useWoodshedStore.getState().resetWorkspace();
       const blob =
         options?.audioBlob ??
         (meta.blobId ? await loadBlobRecord(meta.blobId) : undefined);
@@ -1712,11 +1843,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         devWarn("Missing archived audio blob");
         return;
       }
+      setAudioTimelineLoading(true);
+      pendingHydration.current = meta;
+      useWoodshedStore.getState().resetWorkspace();
       loopsSignature.current = "";
       audioBlobRef.current = blob;
-      await primeWaveformCaches(blob);
-      await ws.load(URL.createObjectURL(blob));
-      await listProjects().then(setProjectsList);
+      try {
+        await primeWaveformCaches(blob);
+        await ws.load(URL.createObjectURL(blob));
+        await listProjects().then(setProjectsList);
+      } catch {
+        setAudioTimelineLoading(false);
+        pendingHydration.current = null;
+        devError("Failed to load project audio");
+      }
     },
     [primeWaveformCaches],
   );
@@ -2015,6 +2155,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     [duration],
   );
 
+  useEffect(() => {
+    if (duration > 0) {
+      setAudioTimelineLoading(false);
+    }
+  }, [duration]);
+
   const userProjectsSelectable = useMemo(
     () => projects.filter((p) => p.id !== DEMO_PROJECT_ID),
     [projects],
@@ -2030,10 +2176,25 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     return "";
   }, [projectId, userProjectsSelectable]);
 
-  const activePhraseName = useMemo(
-    () => activeLoop?.name ?? "No phrase",
-    [activeLoop?.name],
-  );
+  /** Decoded timeline not ready — transport/header use quieter idle chrome. */
+  const playbackChromeIdle = duration <= 0;
+
+  const activePhraseName = useMemo(() => {
+    if (playbackChromeIdle) return "—";
+    return activeLoop?.name ?? "No section";
+  }, [playbackChromeIdle, activeLoop?.name]);
+
+  const enterMobileEditMode = useCallback(() => {
+    if (!isMobilePractice || playbackChromeIdle || isDemoProject) return;
+    setMobileEditModeActive(true);
+    const ws = wavesurferRef.current;
+    if (ws?.isPlaying()) ws.pause();
+    useWoodshedStore.getState().setPlaying(false);
+  }, [isDemoProject, isMobilePractice, playbackChromeIdle]);
+
+  const exitMobileEditMode = useCallback(() => {
+    setMobileEditModeActive(false);
+  }, []);
 
   const handleTransportTogglePlay = useCallback(() => {
     const ws = wavesurferRef.current;
@@ -2137,6 +2298,42 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     ],
   );
 
+  const showCloudSessions = Boolean(
+    isSupabaseConfigured() && supabase && cloudSessionUserId,
+  );
+  const savedProjectsBrowseBusy =
+    !dexieProjectsListed || (showCloudSessions && !cloudPickerListed);
+  const showEmptyWorkspace = duration <= 0 && !audioTimelineLoading;
+
+  const showDemoOrientationRibbon =
+    isDemoProject && duration > 0 && !demoOrientationSeen;
+
+  const desktopShiftFocusGuidanceVisible = useMemo(
+    () =>
+      !isMobilePractice &&
+      !showEmptyWorkspace &&
+      desktopShowShiftFocusCreationGuidance({
+        focusLoopAuthoringComplete: desktopFocusAuthoringComplete,
+        durationSec: duration,
+        loops,
+      }),
+    [
+      isMobilePractice,
+      showEmptyWorkspace,
+      desktopFocusAuthoringComplete,
+      duration,
+      loops,
+    ],
+  );
+
+  const requestOpenSavedProjectPicker = useCallback(() => {
+    setProjectPickerOpenSignal((n) => n + 1);
+  }, []);
+
+  const openDemoFromEmptyWorkspace = useCallback(() => {
+    void handleRestoreProject(DEMO_PROJECT_ID);
+  }, [handleRestoreProject]);
+
   return (
     <section
       ref={sectionRef}
@@ -2145,6 +2342,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       onKeyDown={handleKeyboard}
       aria-label="Woodshed workspace"
     >
+      {showDemoOrientationRibbon ? (
+        <DemoProjectOrientationRibbon onDismiss={dismissDemoOrientation} />
+      ) : null}
       {!isMobilePractice ? (
         <DesktopHeaderBar
           projectName={projectName}
@@ -2154,10 +2354,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           demoProjectLabel={demoPickerTitle}
           userProjects={userProjectsSelectable}
           cloudProjects={cloudProjects}
-          showCloudSessions={Boolean(
-            isSupabaseConfigured() && supabase && cloudSessionUserId,
-          )}
+          showCloudSessions={showCloudSessions}
           onRestoreProject={handleRestoreProject}
+          projectPickerOpenSignal={projectPickerOpenSignal}
+          timelineIdle={playbackChromeIdle}
           onOpenAudioFile={() => fileInputRef.current?.click()}
           activePhraseName={activePhraseName}
           loops={loops}
@@ -2199,59 +2399,89 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           className={cn(
             "min-h-0 min-w-0 flex-1",
             isMobilePractice
-              ? "grid h-full w-full grid-rows-[auto_1fr]"
+              ? "grid h-full w-full min-h-0 grid-rows-[1fr_auto]"
               : "flex flex-col",
           )}
         >
           {isMobilePractice ? (
-            <MobilePracticeControls
-              fileInputRef={fileInputRef}
-              fileAccept={MOBILE_AUDIO_INPUT_ACCEPT}
-              onFileInputChange={handleMobileFileInputChange}
-              projectName={projectName}
-              isDemoProject={isDemoProject}
-              sessionSelectValue={sessionSelectValue}
-              demoProjectId={DEMO_PROJECT_ID}
-              demoProjectLabel={demoPickerTitle}
-              userProjects={userProjectsSelectable}
-              cloudProjects={cloudProjects}
-              showCloudSessions={Boolean(
-                isSupabaseConfigured() && supabase && cloudSessionUserId,
-              )}
-              onRestoreProject={handleRestoreProject}
-              saveStatusMessage={saveStatusMessage}
-              saveStatusTone={saveStatusTone}
-              cloudListError={cloudListError}
-              activePhraseName={activePhraseName}
-              isPlaying={isPlaying}
-              duration={duration}
-              currentTime={currentTime}
-              tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-              loopPlaybackEnabled={loopPlaybackEnabled}
-              canEnableLoopPlayback={Boolean(
-                activeLoop && activeLoop.end > activeLoop.start,
-              )}
-              loopPracticeScope={loopPracticeScope}
-              phraseHasFocusRegions={phraseHasFocusRegions}
-              onCycleLoopPlaybackMode={() =>
-                useWoodshedStore.getState().cycleLoopPlaybackMode()
-              }
-              onTogglePlay={handleTransportTogglePlay}
-              onTempoSlider={handleTransportTempo}
-              onResetTempoTo100={handleResetTempo100}
-              loops={loops}
-              activeLoopId={activeLoopId}
-              onSelectPhrase={handleMobilePhraseSelect}
-              focusSegments={activeLoop?.segments ?? []}
-              onRestartPractice={handleMobileRestartPractice}
-              onSelectFocusSegment={handleMobileFocusSegmentSelect}
-              canRestartPractice={Boolean(
-                activeLoop && activeLoop.end > activeLoop.start,
-              )}
-              focusChipSelectedSegmentId={mobileFocusChipSelectedId}
-            />
+            <>
+              <div
+                className={cn(
+                  "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                  "touch-manipulation border-b px-3 py-2 transition-[box-shadow,background-color] duration-150",
+                  mobileEditModeActive
+                    ? "border-violet-500/25 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.12)] bg-gradient-to-br from-[#0c0820] via-[#0b0806] to-[#10080a]"
+                    : "border-stone-800/80",
+                )}
+                data-mobile-practice="true"
+                data-mobile-edit-mode={mobileEditModeActive ? "true" : "false"}
+              >
+                <div
+                  ref={containerRef}
+                  data-testid="primary-waveform"
+                  className="relative z-0 h-full w-full min-h-0"
+                />
+                {showEmptyWorkspace ? (
+                  <WorkspaceEmptyState
+                    onCreateNewProject={() => fileInputRef.current?.click()}
+                    onOpenDemoProject={openDemoFromEmptyWorkspace}
+                    onOpenSavedProject={requestOpenSavedProjectPicker}
+                    savedProjectsBrowseBusy={savedProjectsBrowseBusy}
+                  />
+                ) : null}
+              </div>
+              <MobilePracticeControls
+                fileInputRef={fileInputRef}
+                fileAccept={MOBILE_AUDIO_INPUT_ACCEPT}
+                onFileInputChange={handleMobileFileInputChange}
+                projectName={projectName}
+                isDemoProject={isDemoProject}
+                sessionSelectValue={sessionSelectValue}
+                demoProjectId={DEMO_PROJECT_ID}
+                demoProjectLabel={demoPickerTitle}
+                userProjects={userProjectsSelectable}
+                cloudProjects={cloudProjects}
+                showCloudSessions={showCloudSessions}
+                onRestoreProject={handleRestoreProject}
+                saveStatusMessage={saveStatusMessage}
+                saveStatusTone={saveStatusTone}
+                cloudListError={cloudListError}
+                activePhraseName={activePhraseName}
+                isPlaying={isPlaying}
+                duration={duration}
+                currentTime={currentTime}
+                tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+                loopPlaybackEnabled={loopPlaybackEnabled}
+                canEnableLoopPlayback={Boolean(
+                  activeLoop && activeLoop.end > activeLoop.start,
+                )}
+                loopPracticeScope={loopPracticeScope}
+                phraseHasFocusRegions={phraseHasFocusRegions}
+                onCycleLoopPlaybackMode={() =>
+                  useWoodshedStore.getState().cycleLoopPlaybackMode()
+                }
+                onTogglePlay={handleTransportTogglePlay}
+                onTempoSlider={handleTransportTempo}
+                onResetTempoTo100={handleResetTempo100}
+                loops={loops}
+                activeLoopId={activeLoopId}
+                onSelectPhrase={handleMobilePhraseSelect}
+                focusSegments={activeLoop?.segments ?? []}
+                onRestartPractice={handleMobileRestartPractice}
+                onSelectFocusSegment={handleMobileFocusSegmentSelect}
+                canRestartPractice={Boolean(
+                  activeLoop && activeLoop.end > activeLoop.start,
+                )}
+                focusChipSelectedSegmentId={mobileFocusChipSelectedId}
+                projectPickerOpenSignal={projectPickerOpenSignal}
+                timelineIdle={playbackChromeIdle}
+                mobileEditModeActive={mobileEditModeActive}
+                onEnterMobileEditMode={enterMobileEditMode}
+                onExitMobileEditMode={exitMobileEditMode}
+              />
+            </>
           ) : null}
-          {!isMobilePractice ? (
+          {!isMobilePractice && !showEmptyWorkspace ? (
             <MiniMap
               placement="top"
               peaks={decodedPeaks}
@@ -2273,21 +2503,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               onFitAll={handleResetZoomFullSong}
             />
           ) : null}
-          {isMobilePractice ? (
-            <div
-              className={cn(
-                "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
-                "min-h-0 flex-1 touch-manipulation border-b border-stone-800/80 px-3 py-2",
-              )}
-              data-mobile-practice="true"
-            >
-              <div
-                ref={containerRef}
-                data-testid="primary-waveform"
-                className="relative z-0 h-full w-full min-h-0"
-              />
-            </div>
-          ) : (
+          {!isMobilePractice ? (
             <div
               ref={desktopSplitRef}
               className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -2304,6 +2520,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                   data-testid="primary-waveform"
                   className="relative z-0 min-h-0 flex-1 w-full"
                 />
+                {showEmptyWorkspace ? (
+                  <WorkspaceEmptyState
+                    onCreateNewProject={() => fileInputRef.current?.click()}
+                    onOpenDemoProject={openDemoFromEmptyWorkspace}
+                    onOpenSavedProject={requestOpenSavedProjectPicker}
+                    savedProjectsBrowseBusy={savedProjectsBrowseBusy}
+                  />
+                ) : null}
+                {desktopShiftFocusGuidanceVisible ? (
+                  <DesktopShiftFocusGuidanceStripe />
+                ) : null}
+                {!showEmptyWorkspace && desktopPostFocusCreationHint ? (
+                  <DesktopPostFocusLoopHintStripe />
+                ) : null}
               </div>
               <div
                 role="separator"
@@ -2354,6 +2584,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                   duration={duration}
                   currentTime={currentTime}
                   isPlaying={isPlaying}
+                  timelineIdle={playbackChromeIdle}
                   loopPlaybackEnabled={loopPlaybackEnabled}
                   canEnableLoopPlayback={Boolean(
                     activeLoop && activeLoop.end > activeLoop.start,
@@ -2396,7 +2627,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                 <DesktopInspectorPanel />
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </section>

@@ -58,7 +58,7 @@ const sections: GuideSection[] = [
   },
   {
     title: "Practice",
-    body: "Use Loop Phrase, Focus Loop, Restart, and Practice speed in the transport bar to drill efficiently.",
+    body: "Use Loop Section, Focus Loop, Restart, and Practice speed in the transport bar to drill efficiently.",
     icon: <Gauge className="h-4 w-4" strokeWidth={2} aria-hidden />,
   },
   {

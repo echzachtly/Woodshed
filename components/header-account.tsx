@@ -76,7 +76,7 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
       <div
         className={cn(
           "shrink-0 animate-pulse rounded-md bg-stone-800/60",
-          compactMobile ? "h-9 w-9 rounded-full" : "h-8 w-24",
+          compactMobile ? "h-8 w-8 rounded-full" : "h-8 w-24",
         )}
         aria-hidden
       />
@@ -90,9 +90,9 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
           <WoodshedHowItWorksDialog open={guideOpen} onOpenChange={setGuideOpen} />
           <Button
             type="button"
-            variant="secondary"
+            variant="ghost"
             size="icon"
-            className="h-9 w-9 shrink-0 rounded-full border-violet-500/25 bg-stone-900/90 text-violet-100 shadow-sm shadow-black/20 hover:border-violet-400/40 hover:bg-stone-800 hover:text-white"
+            className="h-8 w-8 shrink-0 rounded-full border border-stone-800/80 bg-stone-950/40 text-stone-500 shadow-none hover:border-stone-700/80 hover:bg-stone-900/70 hover:text-stone-200"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
             aria-label="Account menu"

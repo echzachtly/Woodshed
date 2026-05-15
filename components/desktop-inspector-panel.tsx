@@ -21,6 +21,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { markDesktopFocusLoopCreatedByUser } from "@/lib/onboarding/desktop-milestones";
 import type { PhraseSegment } from "@/lib/loop-engine";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
@@ -138,6 +139,12 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
     }),
   );
 
+  const commitUserAddedFocusSegment = useCallback(() => {
+    if (!activeLoop || activeLoop.end <= activeLoop.start) return;
+    addSegment(activeLoop.id);
+    markDesktopFocusLoopCreatedByUser();
+  }, [activeLoop, addSegment]);
+
   useEffect(() => {
     if (!inspectorFocusRequestId) return;
     persistExpanded(true);
@@ -235,11 +242,20 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
 
   const [phraseRenameOpen, setPhraseRenameOpen] = useState(false);
   const phraseRenameInputRef = useRef<HTMLInputElement>(null);
+  /** Double-click rename on Focus Loop chips (collapsed + expanded). */
+  const [focusChipRenameSegmentId, setFocusChipRenameSegmentId] = useState<
+    string | null
+  >(null);
+  const [focusChipRenameDraft, setFocusChipRenameDraft] = useState("");
+  const focusChipRenameInputRef = useRef<HTMLInputElement>(null);
+  const skipFocusChipBlurCommitRef = useRef(false);
+
   const zenScrollRef = useRef<HTMLDivElement>(null);
   const [zenShowAdd, setZenShowAdd] = useState(true);
 
   useEffect(() => {
     setPhraseRenameOpen(false);
+    setFocusChipRenameSegmentId(null);
     setZenShowAdd(true);
   }, [activeLoop?.id]);
 
@@ -248,6 +264,78 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
     const t = window.setTimeout(() => phraseRenameInputRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, [phraseRenameOpen]);
+
+  const beginFocusChipRename = useCallback(
+    (seg: PhraseSegment) => {
+      if (!activeLoop) return;
+      skipFocusChipBlurCommitRef.current = false;
+      setPhraseRenameOpen(false);
+      selectSegment(activeLoop.id, seg.id);
+      setFocusChipRenameDraft(seg.name);
+      setFocusChipRenameSegmentId(seg.id);
+    },
+    [activeLoop, selectSegment],
+  );
+
+  const cancelFocusChipRename = useCallback(() => {
+    skipFocusChipBlurCommitRef.current = true;
+    if (!activeLoop || !focusChipRenameSegmentId) {
+      setFocusChipRenameSegmentId(null);
+      return;
+    }
+    const seg = activeLoop.segments?.find((s) => s.id === focusChipRenameSegmentId);
+    setFocusChipRenameDraft(seg?.name ?? "");
+    setFocusChipRenameSegmentId(null);
+  }, [activeLoop, focusChipRenameSegmentId]);
+
+  const commitFocusChipRename = useCallback(() => {
+    if (skipFocusChipBlurCommitRef.current) {
+      skipFocusChipBlurCommitRef.current = false;
+      return;
+    }
+    if (!activeLoop || !focusChipRenameSegmentId) {
+      setFocusChipRenameSegmentId(null);
+      return;
+    }
+    const seg = activeLoop.segments?.find((s) => s.id === focusChipRenameSegmentId);
+    const t = focusChipRenameDraft.trim();
+    if (seg && t && t !== seg.name) {
+      updateSegment(activeLoop.id, seg.id, { name: t });
+    }
+    setFocusChipRenameSegmentId(null);
+  }, [
+    activeLoop,
+    focusChipRenameDraft,
+    focusChipRenameSegmentId,
+    updateSegment,
+  ]);
+
+  /** When the edited segment disappears (deleted elsewhere), bail out. */
+  useEffect(() => {
+    if (!focusChipRenameSegmentId || !activeLoop?.segments?.length) {
+      return;
+    }
+    if (
+      !activeLoop.segments.some((s) => s.id === focusChipRenameSegmentId)
+    ) {
+      setFocusChipRenameSegmentId(null);
+    }
+  }, [activeLoop?.segments, focusChipRenameSegmentId]);
+
+  useLayoutEffect(() => {
+    if (!focusChipRenameSegmentId) return;
+    const id = window.requestAnimationFrame(() => {
+      const el = focusChipRenameInputRef.current;
+      if (!el) return;
+      el.focus();
+      try {
+        el.select();
+      } catch {
+        /* ignore selection edge cases */
+      }
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [focusChipRenameSegmentId, expanded]);
 
   const commitPhraseRename = useCallback(() => {
     if (!activeLoop) return;
@@ -335,7 +423,10 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               type="button"
               title="Double-click to rename phrase"
               className="flex w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-full border border-stone-700/60 bg-stone-950/55 py-1.5 pl-3 pr-2.5 text-left transition-colors hover:border-stone-600 hover:bg-stone-900/55"
-              onDoubleClick={() => setPhraseRenameOpen(true)}
+              onDoubleClick={() => {
+                setFocusChipRenameSegmentId(null);
+                setPhraseRenameOpen(true);
+              }}
             >
               <span className="min-w-0 truncate text-[13px] font-semibold tracking-tight text-stone-100">
                 {activeLoop.name}
@@ -396,23 +487,56 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
         role="list"
         aria-label="Focus regions"
       >
-        {focusRegionRows.map((seg) => (
-          <button
-            key={seg.id}
-            type="button"
-            role="listitem"
-            data-zen-focus-pill
-            onClick={() => selectSegment(activeLoop.id, seg.id)}
-            className={zenFocusPillClass(seg.id === activeSegmentId)}
-          >
-            {seg.name}
-          </button>
-        ))}
+        {focusRegionRows.map((seg) =>
+          focusChipRenameSegmentId === seg.id ? (
+            <input
+              key={seg.id}
+              ref={focusChipRenameInputRef}
+              role="listitem"
+              aria-label={`Rename Focus Loop "${seg.name}"`}
+              type="text"
+              value={focusChipRenameDraft}
+              onChange={(e) => setFocusChipRenameDraft(e.target.value)}
+              onBlur={commitFocusChipRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitFocusChipRename();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelFocusChipRename();
+                }
+              }}
+              className={cn(
+                zenFocusPillClass(seg.id === activeSegmentId),
+                "h-[26px] min-w-[5.5rem] max-w-[12rem] bg-stone-950/95 font-sans outline-none placeholder:text-stone-600 focus-visible:ring-2 focus-visible:ring-amber-500/35",
+              )}
+              placeholder="Focus Loop name"
+            />
+          ) : (
+            <button
+              key={seg.id}
+              type="button"
+              role="listitem"
+              data-zen-focus-pill
+              title="Double-click to rename Focus Loop"
+              onClick={() => selectSegment(activeLoop.id, seg.id)}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                beginFocusChipRename(seg);
+              }}
+              className={zenFocusPillClass(seg.id === activeSegmentId)}
+            >
+              {seg.name}
+            </button>
+          ),
+        )}
         {zenShowAdd ? (
           <button
             type="button"
             data-zen-add
-            onClick={() => addSegment(activeLoop.id)}
+            onClick={commitUserAddedFocusSegment}
             className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-stone-600/75 px-2 py-1 text-[11px] font-medium text-stone-500 transition-colors hover:border-amber-500/35 hover:bg-stone-900/45 hover:text-amber-100/90"
           >
             <Plus className="h-3 w-3" aria-hidden />
@@ -506,24 +630,58 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-2">
             <div className="flex min-h-[2.75rem] flex-1 flex-wrap content-start items-center gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {focusRegionRows.map((seg) => (
-                <button
-                  key={seg.id}
-                  type="button"
-                  onClick={() => selectSegment(activeLoop.id, seg.id)}
-                  className={cn(
-                    "shrink-0 rounded-full border px-4 py-2 text-[13px] font-semibold transition-all",
-                    seg.id === activeSegmentId
-                      ? "border-amber-400/55 bg-amber-500/20 text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]"
-                      : "border-stone-600/80 bg-stone-950/50 text-stone-300 hover:border-amber-500/25 hover:bg-stone-900/70 hover:text-stone-100",
-                  )}
-                >
-                  {seg.name}
-                </button>
-              ))}
+              {focusRegionRows.map((seg) =>
+                focusChipRenameSegmentId === seg.id ? (
+                  <input
+                    key={seg.id}
+                    ref={focusChipRenameInputRef}
+                    aria-label={`Rename Focus Loop "${seg.name}"`}
+                    type="text"
+                    value={focusChipRenameDraft}
+                    onChange={(e) => setFocusChipRenameDraft(e.target.value)}
+                    onBlur={commitFocusChipRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitFocusChipRename();
+                      }
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        cancelFocusChipRename();
+                      }
+                    }}
+                    className={cn(
+                      "h-9 shrink-0 rounded-full border px-4 py-2 text-[13px] font-semibold outline-none transition-all focus-visible:ring-2 focus-visible:ring-amber-500/35",
+                      seg.id === activeSegmentId
+                        ? "border-amber-400/55 bg-amber-500/25 text-amber-50 placeholder:text-amber-200/55"
+                        : "border-stone-600/80 bg-stone-950/95 text-stone-200 placeholder:text-stone-600",
+                    )}
+                    placeholder="Focus Loop name"
+                  />
+                ) : (
+                  <button
+                    key={seg.id}
+                    type="button"
+                    title="Double-click to rename Focus Loop"
+                    onClick={() => selectSegment(activeLoop.id, seg.id)}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      beginFocusChipRename(seg);
+                    }}
+                    className={cn(
+                      "shrink-0 rounded-full border px-4 py-2 text-[13px] font-semibold transition-all",
+                      seg.id === activeSegmentId
+                        ? "border-amber-400/55 bg-amber-500/20 text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]"
+                        : "border-stone-600/80 bg-stone-950/50 text-stone-300 hover:border-amber-500/25 hover:bg-stone-900/70 hover:text-stone-100",
+                    )}
+                  >
+                    {seg.name}
+                  </button>
+                ),
+              )}
               <button
                 type="button"
-                onClick={() => addSegment(activeLoop.id)}
+                onClick={commitUserAddedFocusSegment}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-full border-2 border-dashed border-stone-600/80 px-4 py-2 text-[13px] font-medium text-stone-400 transition-colors hover:border-amber-500/35 hover:bg-stone-900/40 hover:text-amber-100/90"
               >
                 <Plus className="h-4 w-4" aria-hidden />

@@ -22,12 +22,14 @@ export type TempoPillPickerProps = {
   onSetPercent: (pct: number) => void;
   /** Widen pill on desktop. */
   className?: string;
+  /** Inert when no decoded timeline (empty workspace). */
+  disabled?: boolean;
 };
 
 export const TempoPillPicker = memo(function TempoPillPicker(
   props: TempoPillPickerProps,
 ) {
-  const { tempoPercent, onSetPercent, className } = props;
+  const { tempoPercent, onSetPercent, className, disabled = false } = props;
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(false);
   const [draft, setDraft] = useState("");
@@ -84,21 +86,30 @@ export const TempoPillPicker = memo(function TempoPillPicker(
       <button
         type="button"
         id={labelId}
-        aria-expanded={open}
+        aria-expanded={open && !disabled}
         aria-haspopup="menu"
-        aria-label={`Tempo ${rounded} percent. Choose a preset or custom.`}
+        aria-label={
+          disabled
+            ? "Tempo — available after loading audio"
+            : `Tempo ${rounded} percent. Choose a preset or custom.`
+        }
         onClick={() => {
+          if (disabled) return;
           setOpen((o) => !o);
           setCustomMode(false);
           setDraft("");
         }}
+        disabled={disabled}
+        aria-disabled={disabled}
         className={cn(
           "flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-1.5",
           "border-stone-600/45 bg-gradient-to-b from-stone-900/88 to-stone-950/95 text-stone-200",
           "text-[13px] font-medium tabular-nums shadow-inner shadow-black/20",
           "transition-colors hover:border-stone-500/55 hover:text-stone-50",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/70",
-          open && "border-stone-500/60 text-stone-50",
+          open && !disabled && "border-stone-500/60 text-stone-50",
+          disabled &&
+            "pointer-events-none border-stone-800/55 bg-stone-950/65 text-stone-600 shadow-none",
         )}
       >
         <span>{rounded}%</span>
@@ -111,7 +122,7 @@ export const TempoPillPicker = memo(function TempoPillPicker(
         />
       </button>
 
-      {open ? (
+      {open && !disabled ? (
         <div
           role="menu"
           aria-labelledby={labelId}

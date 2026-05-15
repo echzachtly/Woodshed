@@ -208,6 +208,8 @@ export type MobileProjectSelectorTriggerProps = {
   onOpen: () => void;
   /** Widen or restyle the pill (e.g. desktop). */
   triggerClassName?: string;
+  /** Timeline not decoded — quieter project pill. */
+  chromeIdle?: boolean;
   /** Desktop dropdown uses `menu`; mobile sheet uses `dialog`. */
   ariaHasPopup?: "dialog" | "menu";
 };
@@ -221,6 +223,7 @@ export const MobileProjectSelectorTrigger = memo(
       sheetOpen,
       onOpen,
       triggerClassName,
+      chromeIdle = false,
       ariaHasPopup = "dialog",
     } = props;
     return (
@@ -233,11 +236,15 @@ export const MobileProjectSelectorTrigger = memo(
           aria-label={`Current project: ${projectName}. Tap to switch project.`}
           className={cn(
             "mx-auto flex min-h-[44px] w-full max-w-[min(100%,22rem)] items-center gap-2 rounded-xl border px-3.5 py-2",
-            "border-stone-600/40 bg-gradient-to-b from-stone-900/85 to-stone-950/95 text-stone-200",
-            "shadow-inner shadow-black/25",
             "transition-[transform,border-color,background-color] active:scale-[0.99] touch-manipulation",
-            "hover:border-stone-500/50 hover:bg-stone-900/90 hover:text-stone-100",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/70",
+            chromeIdle
+              ? "border-stone-800/55 bg-gradient-to-b from-stone-950/90 to-[#080605] text-stone-500 shadow-inner shadow-black/15 hover:border-stone-700/60 hover:bg-stone-950/95 hover:text-stone-400"
+              : cn(
+                  "border-stone-600/40 bg-gradient-to-b from-stone-900/85 to-stone-950/95 text-stone-200",
+                  "shadow-inner shadow-black/25",
+                  "hover:border-stone-500/50 hover:bg-stone-900/90 hover:text-stone-100",
+                ),
             triggerClassName,
           )}
         >

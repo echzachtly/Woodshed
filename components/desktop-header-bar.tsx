@@ -53,6 +53,13 @@ export type DesktopHeaderBarProps = {
   hiddenFileProps: Omit<ComponentProps<"input">, "children"> & {
     "data-testid"?: string;
   };
+  /**
+   * Increment to open the Projects menu from the parent (e.g. empty workspace).
+   * Opening is idempotent when the value is unchanged.
+   */
+  projectPickerOpenSignal?: number;
+  /** No decoded timeline — softer session picker chrome (project / phrase pills). */
+  timelineIdle?: boolean;
 };
 
 export const DesktopHeaderBar = memo(function DesktopHeaderBar(
@@ -84,12 +91,15 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
     devExportLoopsJson,
     onSaveProject,
     hiddenFileProps,
+    projectPickerOpenSignal = 0,
+    timelineIdle = false,
   } = props;
 
   const [open, setOpen] = useState<OpenMenu>(null);
   const [utilOpen, setUtilOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const utilRef = useRef<HTMLDivElement | null>(null);
+  const handledProjectPickerSignalRef = useRef(0);
 
   useEffect(() => {
     if (!open) return;
@@ -124,6 +134,15 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
       document.removeEventListener("keydown", onKey);
     };
   }, [utilOpen]);
+
+  useEffect(() => {
+    if (projectPickerOpenSignal <= handledProjectPickerSignalRef.current) {
+      return;
+    }
+    handledProjectPickerSignalRef.current = projectPickerOpenSignal;
+    setUtilOpen(false);
+    setOpen("project");
+  }, [projectPickerOpenSignal]);
 
   const toggleMenu = (m: Exclude<OpenMenu, null>) =>
     setOpen((prev) => (prev === m ? null : m));
@@ -188,14 +207,16 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
               projectName={projectName}
               isDemoProject={isDemoProject}
               sheetOpen={open === "project"}
+              chromeIdle={timelineIdle}
               onOpen={() => {
                 setUtilOpen(false);
                 toggleMenu("project");
               }}
               ariaHasPopup="menu"
               triggerClassName={cn(
-                "w-full min-h-[34px] gap-2 border-stone-700/40 bg-stone-950/80 px-2.5 py-1 text-[12px]",
+                "w-full min-h-[34px] gap-2 px-2.5 py-1 text-[12px]",
                 "shadow-none",
+                !timelineIdle && "border-stone-700/40 bg-stone-950/80",
               )}
             />
             {open === "project" ? (
@@ -226,12 +247,16 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
             <MobilePhraseSelectorTrigger
               activePhraseName={activePhraseName}
               sheetOpen={open === "phrase"}
+              chromeIdle={timelineIdle}
               onOpen={() => {
                 setUtilOpen(false);
                 toggleMenu("phrase");
               }}
               ariaHasPopup="menu"
-              triggerClassName="w-full min-h-[34px] border-stone-700/40 bg-stone-950/80 px-2.5 py-1 text-[13px] sm:text-[14px]"
+              triggerClassName={cn(
+                "w-full min-h-[34px] px-2.5 py-1 text-[13px] sm:text-[14px]",
+                !timelineIdle && "border-stone-700/40 bg-stone-950/80",
+              )}
             />
             {open === "phrase" ? (
               <div className={menuShell}>

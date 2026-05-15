@@ -144,10 +144,10 @@ export const MobilePhraseBottomSheet = memo(function MobilePhraseBottomSheet(
                     id={titleId}
                     className="text-[12px] font-semibold uppercase tracking-[0.2em] text-stone-400"
                   >
-                    Phrases
+                    Practice Sections
                   </h2>
                   <p className="mt-0.5 text-[12px] leading-snug text-stone-500">
-                    Select a phrase to practice.
+                    Choose a section to practice.
                   </p>
                 </div>
                 <Button
@@ -170,7 +170,7 @@ export const MobilePhraseBottomSheet = memo(function MobilePhraseBottomSheet(
             >
               {loops.length === 0 ? (
                 <li className="flex min-h-[52px] items-center justify-center px-2 py-6 text-center text-[13px] text-stone-500">
-                  No phrases in this project yet.
+                  No Practice Sections in this project yet.
                 </li>
               ) : null}
               {loops.map((loop) => {
@@ -239,6 +239,8 @@ export type MobilePhraseSelectorTriggerProps = {
   sheetOpen: boolean;
   onOpen: () => void;
   triggerClassName?: string;
+  /** Timeline not decoded — quieter section pill (empty workspace). */
+  chromeIdle?: boolean;
   /** Desktop dropdown uses `menu`; mobile sheet uses `dialog`. */
   ariaHasPopup?: "dialog" | "menu";
 };
@@ -251,6 +253,7 @@ export const MobilePhraseSelectorTrigger = memo(
       sheetOpen,
       onOpen,
       triggerClassName,
+      chromeIdle = false,
       ariaHasPopup = "dialog",
     } = props;
     return (
@@ -260,23 +263,40 @@ export const MobilePhraseSelectorTrigger = memo(
           onClick={onOpen}
           aria-expanded={sheetOpen}
           aria-haspopup={ariaHasPopup}
-          aria-label={`Current phrase: ${activePhraseName}. Tap to choose a phrase.`}
+          aria-label={
+            chromeIdle
+              ? "Idle — open Practice Sections after loading audio"
+              : `Current Practice Section: ${activePhraseName}. Tap to switch.`
+          }
           className={cn(
             "mx-auto flex min-h-[52px] w-full max-w-[min(100%,24rem)] items-center justify-center gap-2.5 rounded-2xl border-2 px-5 py-3",
-            "border-violet-400/45 bg-gradient-to-b from-violet-950/35 via-stone-900/95 to-stone-950 text-stone-50",
-            "shadow-[0_8px_28px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)]",
             "transition-[transform,box-shadow,border-color] active:scale-[0.99] touch-manipulation",
-            "hover:border-violet-300/55 hover:shadow-[0_10px_32px_rgba(76,29,149,0.18)]",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400/80",
+            chromeIdle
+              ? cn(
+                  "border-stone-800/60 bg-gradient-to-b from-stone-950/90 to-[#080605] text-stone-500",
+                  "shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] hover:border-stone-700/65 hover:text-stone-400",
+                )
+              : cn(
+                  "border-violet-400/45 bg-gradient-to-b from-violet-950/35 via-stone-900/95 to-stone-950 text-stone-50",
+                  "shadow-[0_8px_28px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)]",
+                  "hover:border-violet-300/55 hover:shadow-[0_10px_32px_rgba(76,29,149,0.18)]",
+                ),
             triggerClassName,
           )}
         >
-          <span className="truncate text-[16px] font-semibold leading-snug tracking-tight">
+          <span
+            className={cn(
+              "truncate text-[16px] font-semibold leading-snug tracking-tight",
+              chromeIdle && "font-medium text-stone-500",
+            )}
+          >
             {activePhraseName}
           </span>
           <ChevronDown
             className={cn(
-              "h-5 w-5 shrink-0 text-violet-200 transition-transform",
+              "h-5 w-5 shrink-0 transition-transform",
+              chromeIdle ? "text-stone-600" : "text-violet-200",
               sheetOpen && "rotate-180",
             )}
             aria-hidden
