@@ -76,7 +76,9 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
   } = props;
 
   const editingPhrase = Boolean(
-    activeLoopId && editableLoopId === activeLoopId,
+    activeLoopId &&
+      editableLoopId === activeLoopId &&
+      !regionContextActive,
   );
 
   const restartHelp =

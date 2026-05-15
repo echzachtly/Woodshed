@@ -41,7 +41,7 @@ Phased checklist for the mobile practice refinement pass. Check items when done;
   **Acceptance:** With focus regions, user sees the active region emphasized on the waveform; gestures remain practice-oriented (seek/pinch/pan as before).
 
   **Notes / findings:**
-  - Region effect now draws segment overlays on mobile with `pointer-events: none`, classes `woodshed-region-segment-readonly` / `-selected`, and slightly stronger fill for the active segment. Desktop click-to-select on segments unchanged.
+  - Region effect now draws segment overlays on mobile with `pointer-events: none`, classes `woodshed-region-segment-readonly` / `-selected`, and slightly stronger fill for the active segment. Desktop click-to-select on segments unchanged. **Desktop-only:** focus region waveform resize is gated by `focusRegionWaveformEditUnlockedById` (inspector Lock / Edit); **phrase** waveform resize by `phraseWaveformEditUnlockedById` (inspector + transport/sidebar, session-only); mobile never sets resize on phrase or segment regions.
 
 - [x] **Repetition workflow cohesion** — Phrase sheet pick + loop modes + focus chips + restart behave consistently (no contradictory seek/scope after chip vs phrase pick).
 

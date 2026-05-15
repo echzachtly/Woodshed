@@ -340,6 +340,10 @@ When a phrase is selected, the user should be able to:
 
 - Return to looping the full parent phrase
 
+- **Desktop:** Lock or unlock waveform boundary editing per focus region (desktop inspector). When unlocked, resize handles on the main phrase waveform update `startTime` / `endTime`; when locked, playback and looping use stored bounds without accidental waveform edits.
+
+- **Desktop:** The **parent phrase** uses the same pattern: **Phrase waveform boundaries** in the inspector (plus transport / sidebar Edit) toggles `phraseWaveformEditUnlockedById`, aligned with `editableLoopId`. Phrase handles are **resize-only** (no whole-phrase drag), hidden while a focus region is selected in the inspector so boundary editing stays unambiguous.
+
 If existing waveform interactions support boundary editing naturally, allow boundary adjustment as well.
 
 ---

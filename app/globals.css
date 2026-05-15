@@ -87,8 +87,11 @@ body {
  *                               waveform's grab cursor so drags pan through it.
  *   .woodshed-region-active   — saved practice phrase that's currently selected.
  *                               Clearly framed, no drag handles, no glow.
- *   .woodshed-region-editing  — draft phrase or saved phrase in Edit mode.
- *                               Brighter edges, soft glow, drag/resize handles.
+ *   .woodshed-region-editing  — phrase waveform boundaries unlocked (desktop)
+ *                               or draft phrase with handles; resize edges only.
+ *
+ *   .woodshed-region-segment-editable — desktop focus region with waveform
+ *                               boundary editing unlocked (resize handles active).
  *
  * The waveform stays the hero — emphasis is carried by edges, not heavy fills.
  */
@@ -124,6 +127,15 @@ body {
 
 [data-testid="primary-waveform"] .woodshed-region-editing {
   position: relative;
+  /**
+   * Phrase layer is stacked above focus segments while handles are active. The region
+   * root must not steal clicks in the middle — `none` lets hits reach segments underneath.
+   *
+   * WaveSurfer resize handles use `part="region-handle region-handle-left"` (and `-right`),
+   * not necessarily as `:first-child` / `:last-child` (e.g. extra nodes). Those handles
+   * must explicitly get `pointer-events: auto` — see `[part*="region-handle"]` rules below.
+   */
+  pointer-events: none;
   border-radius: 2px;
   --woodshed-edge: rgba(237, 233, 254, 0.85);
   --woodshed-edge-glow: rgba(196, 181, 253, 0.42);
@@ -176,19 +188,68 @@ body {
     0 0 12px rgba(139, 92, 246, 0.12);
 }
 
-/** Resize handles are first/last children in WaveSurfer regions — only meaningful while editing. */
-[data-testid="primary-waveform"] .woodshed-region-editing > :first-child,
-[data-testid="primary-waveform"] .woodshed-region-editing > :last-child {
+/** Desktop: selected focus region with waveform boundary editing unlocked. */
+[data-testid="primary-waveform"] .woodshed-region-segment-editable {
+  position: relative;
+  --woodshed-seg-edge: rgba(212, 207, 232, 0.72);
+  box-shadow:
+    inset 2px 0 0 0 var(--woodshed-seg-edge),
+    inset -2px 0 0 0 var(--woodshed-seg-edge),
+    inset 0 0 0 1px rgba(167, 139, 250, 0.18);
+}
+
+[data-testid="primary-waveform"] .woodshed-region-segment-editable > :first-child,
+[data-testid="primary-waveform"] .woodshed-region-segment-editable > :last-child {
   transition:
     box-shadow 120ms ease,
     filter 120ms ease;
 }
 
-[data-testid="primary-waveform"] .woodshed-region-editing > :first-child:hover,
-[data-testid="primary-waveform"] .woodshed-region-editing > :last-child:hover {
-  filter: brightness(1.20);
+[data-testid="primary-waveform"] .woodshed-region-segment-editable > :first-child:hover,
+[data-testid="primary-waveform"] .woodshed-region-segment-editable > :last-child:hover {
+  filter: brightness(1.15);
+  box-shadow: inset 0 0 12px rgba(196, 181, 253, 0.35);
+  cursor: ew-resize;
+}
+
+/**
+ * Phrase boundary handles (WaveSurfer `part` includes `region-handle-left` / `-right`).
+ * `:first-child` / `:last-child` missed the real nodes, so handles stayed `pointer-events: none`
+ * and never received drags.
+ */
+[data-testid="primary-waveform"]
+  .woodshed-region-editing
+  [part*="region-handle"] {
+  pointer-events: auto;
+  cursor: ew-resize;
+  z-index: 3;
+  transition:
+    box-shadow 120ms ease,
+    filter 120ms ease;
+}
+
+[data-testid="primary-waveform"]
+  .woodshed-region-editing
+  [part*="region-handle"]:hover {
+  filter: brightness(1.2);
   box-shadow: inset 0 0 14px rgba(196, 181, 253, 0.45);
   cursor: ew-resize;
+}
+
+/**
+ * Dev/debug only visual cue for phrase handles.
+ * Toggled by `data-phrase-handle-debug="true"` in workspace runtime diagnostics.
+ */
+[data-testid="primary-waveform"][data-phrase-handle-debug="true"]
+  .woodshed-region-editing
+  [part*="region-handle"] {
+  border-left-color: rgba(253, 224, 71, 0.98) !important;
+  border-right-color: rgba(253, 224, 71, 0.98) !important;
+  background: rgba(253, 224, 71, 0.22) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(253, 224, 71, 0.95),
+    0 0 0 1px rgba(245, 158, 11, 0.95),
+    0 0 14px rgba(250, 204, 21, 0.62) !important;
 }
 
 /** Pan-active cursor visual feedback (toggled by `installWaveformPanGesture`). */

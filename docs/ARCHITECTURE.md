@@ -29,7 +29,8 @@ Internally, a “phrase” is still stored as a **loop** object (start time, end
 Two IDs in the app keep this clear:
 
 - **`activeLoopId`** — which phrase you are **practicing** (what you hear and what the main waveform highlights).
-- **`editableLoopId`** — which phrase is currently **unlocked for editing** on the desktop waveform (at most one).
+- **`editableLoopId`** — which phrase is the **authoring edit target** for the sidebar / transport (at most one); kept aligned with **`phraseWaveformEditUnlockedById`** when you lock or unlock phrase waveform handles.
+- **`phraseWaveformEditUnlockedById`** / **`focusRegionWaveformEditUnlockedById`** — desktop **session** maps (not saved in the project file): sparse `true` = waveform resize handles active for that phrase or focus region.
 
 Mobile practice mode does **not** offer boundary editing; the phrase list and bottom sheet only **choose** which phrase is active.
 
@@ -58,7 +59,7 @@ Panning on the desktop wave, the mini-map, mouse-wheel zoom, and keyboard zoom s
 | **Transport** | Full three-column bar (repeat, phrase start, full song, play, tempo) | Compact stack: phrase picker sheet, repeat, large play, tempo |
 | **Header** | Full project controls + save | Same sessions, compact account, **no save button** (practice only) |
 | **Mini-map** | Interactive (seek + drag viewport) | Shown as **read-only** overview |
-| **Waveform** | Click to seek; drag to pan; double-click adds a phrase; regions editable when in edit mode | Tap/drag to **seek**; pinch to zoom; phrase region is **non-interactive** (read-only) |
+| **Waveform** | Click to seek; drag to pan; double-click adds a phrase; phrase handles when the phrase’s waveform row is **unlocked** in the inspector (or via transport/sidebar Edit); focus handles when that focus region is unlocked | Tap/drag to **seek**; pinch to zoom; phrase region is **non-interactive** (read-only) |
 | **Phrase list** | Sidebar list + add phrase | Bottom sheet from the phrase pill |
 
 The underlying **Zustand store** is the same; only the **surface** changes.
@@ -68,7 +69,7 @@ The underlying **Zustand store** is the same; only the **surface** changes.
 ## 5. Waveform rendering model
 
 - **Peaks** — WaveSurfer draws the waveform. An optional decoded peak array feeds the **mini-map** for a lightweight overview.
-- **Regions plugin** — Draws exactly **one** region on the main wave: the **active** phrase. Colors differ for locked vs active vs editing.
+- **Regions plugin** — Draws the **active** phrase region plus focus region overlays. Phrase resize handles follow **`phraseWaveformEditUnlockedById`** (and no focus region selected in the inspector); focus handles follow **`focusRegionWaveformEditUnlockedById`**. Phrase and focus regions use **resize-only** dragging (edge handles), not whole-region drag.
 - **Gutters** — Extra horizontal margin so the first and last moments of the file are not clipped at the screen edge; phrase centering math accounts for this.
 - **Pan gesture** — Custom pointer logic: tiny movement = **seek**; larger drag = **pan** the scroll container. Editable regions skip this so drag/resize stays with WaveSurfer’s plugin.
 

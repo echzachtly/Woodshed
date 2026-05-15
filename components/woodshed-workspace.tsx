@@ -73,6 +73,16 @@ import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
 import { cn } from "@/lib/utils";
+import {
+  phraseHandleDiagnosticsEnabled,
+  schedulePhraseHandleDiagnostics,
+} from "@/lib/woodshed-phrase-handle-diagnostics";
+import {
+  installRegionsVirtualAppendPhrasePin,
+  logRegionElementMountProbe,
+  logRegionsPinProbe,
+  setActivePhraseRegionVirtualAppendPin,
+} from "@/lib/wavesurfer-regions-virtual-append-phrase-pin";
 import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
 import {
   PLAYHEAD_UI_TIME_MS,
@@ -125,6 +135,7 @@ type RegionHandle = {
 
 async function loadRegionsFactory(): Promise<unknown> {
   const mod = await import("wavesurfer.js/dist/plugins/regions.esm.js");
+  installRegionsVirtualAppendPhrasePin(mod.default as never);
   return mod.default;
 }
 
@@ -211,6 +222,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<RegionsHandle | null>(null);
+  const phraseHandleDiagCleanupRef = useRef<(() => void) | null>(null);
 
   const [projects, setProjectsList] = useState<StoredProjectMeta[]>([]);
   const [demoPickerTitle, setDemoPickerTitle] = useState(
@@ -237,6 +249,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     activeSegmentId,
     loopPracticeScope,
     lastPracticeSegmentIdByPhrase,
+    focusRegionWaveformEditUnlockedById,
+    phraseWaveformEditUnlockedById,
   } = useWoodshedStore(
     useShallow((s) => ({
       projectName: s.projectName,
@@ -253,6 +267,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       activeSegmentId: s.activeSegmentId,
       loopPracticeScope: s.loopPracticeScope,
       lastPracticeSegmentIdByPhrase: s.lastPracticeSegmentIdByPhrase,
+      focusRegionWaveformEditUnlockedById: s.focusRegionWaveformEditUnlockedById,
+      phraseWaveformEditUnlockedById: s.phraseWaveformEditUnlockedById,
     })),
   );
   const activeLoop = useMemo(
@@ -572,6 +588,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   useEffect(() => {
     let destroyed = false;
     const regionFactoryPromise = loadRegionsFactory();
+    const initialHost = containerRef.current;
     const starterZoom =
       typeof window === "undefined"
         ? 50
@@ -580,8 +597,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const initialAutoScroll = !storeForWsInit.loopPlaybackEnabled;
 
     void (async () => {
-      const host = containerRef.current;
+      const host = initialHost;
       if (!host) return;
+      const wsDiagId =
+        process.env.NODE_ENV === "development"
+          ? registerWaveSurferDiagInstance()
+          : null;
+      if (process.env.NODE_ENV === "development") {
+        logWaveformLifecycle("init:host-before-await", {
+          ws: null,
+          host,
+          regions: null,
+          wsDiagId,
+        });
+      }
       const Factory = await regionFactoryPromise;
       if (destroyed || !Factory) return;
 
@@ -620,9 +649,45 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         typeof regionsCtor.create === "function"
           ? regionsCtor.create()
           : new (Factory as new () => RegionsHandle)();
+      if (process.env.NODE_ENV === "development") {
+        logWaveformLifecycle("init:after-ws-create", {
+          ws,
+          host,
+          regions: null,
+          wsDiagId,
+        });
+      }
+      if (process.env.NODE_ENV === "development") {
+        logRegionsPinProbe(regions, "after regions ctor");
+      }
 
       try {
         ws.registerPlugin(regions as never);
+        if (process.env.NODE_ENV === "development") {
+          logRegionsPinProbe(regions, "after registerPlugin");
+          logWaveformLifecycle("init:after-register-plugin", {
+            ws,
+            host,
+            regions,
+            wsDiagId,
+          });
+          globalThis.setTimeout(() => {
+            logWaveformLifecycle("init:post-timeout", {
+              ws,
+              host,
+              regions,
+              wsDiagId,
+            });
+          }, 0);
+          requestAnimationFrame(() => {
+            logWaveformLifecycle("init:post-raf", {
+              ws,
+              host,
+              regions,
+              wsDiagId,
+            });
+          });
+        }
       } catch {
         devError("Regions plugin unavailable");
       }
@@ -646,9 +711,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
        *   around while practicing.
        *
        * Gesture priority:
-       *   1. Editable region → regions plugin handles drag/resize (we bail out).
-       *   2. Locked/selected region or empty waveform → pan when the pointer
-       *      moves past the slop threshold; click without drag still seeks.
+       *   1. Phrase resize handles (inside `.woodshed-region-editing`) — regions
+       *      plugin owns resize; we bail out when the event target is inside that
+       *      wrapper (handles keep `pointer-events: auto`; the phrase fill is `none`).
+       *   2. Focus region overlay (`.woodshed-region-segment`) — click-to-select /
+       *      resize when unlocked; we never arm pan from inside the overlay.
+       *   3. Elsewhere on the waveform — pan after slop; click without drag seeks.
        *
        * Click-vs-pan disambiguation:
        *   We require ~4px of movement before activating pan so single clicks
@@ -854,6 +922,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
     return () => {
       destroyed = true;
+      if (process.env.NODE_ENV === "development") {
+        logWaveformLifecycle("init:cleanup-before-destroy", {
+          ws: wavesurferRef.current,
+          host: initialHost,
+          regions: regionsRef.current,
+          wsDiagId: null,
+        });
+      }
       cancelPlaybackLoopRef.current?.();
       cancelPlaybackLoopRef.current = null;
       loopsSignature.current = "";
@@ -865,6 +941,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       pinchZoomReleaseRef.current?.();
       pinchZoomReleaseRef.current = null;
       wavesurferRef.current?.destroy();
+      if (process.env.NODE_ENV === "development") {
+        unregisterWaveSurferDiagInstance();
+      }
       wavesurferRef.current = null;
     };
   }, []);
@@ -933,6 +1012,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const ws = wavesurferRef.current;
     const regions = regionsRef.current;
     if (!ws || !regions) return;
+    if (process.env.NODE_ENV === "development") {
+      logRegionsPinProbe(regions, "regions effect start");
+      logWaveformLifecycle("regions-effect:start", {
+        ws,
+        host: containerRef.current,
+        regions,
+        wsDiagId: null,
+      });
+    }
 
     /**
      * Main waveform shows only the currently active practice phrase (one region).
@@ -947,30 +1035,192 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     /**
      * Signature only tracks what the main waveform actually draws.
      * If an inactive loop's bounds change (e.g. background tempo change),
-     * we don't waste a region rebuild. Editable-state is included so flipping
-     * in/out of Edit mode rebuilds with the right drag/resize flags.
+     * we don't waste a region rebuild. Phrase edit mode and per-segment waveform
+     * unlock flags are included so toggling handles rebuilds regions.
      */
     const segSig = renderedLoop?.segments?.length
       ? renderedLoop.segments
           .map((s) => `${s.id}:${s.startTime.toFixed(3)}:${s.endTime.toFixed(3)}`)
           .join(",")
       : "";
+    const segUnlockSig = renderedLoop?.segments?.length
+      ? renderedLoop.segments
+          .map((s) =>
+            focusRegionWaveformEditUnlockedById[s.id] ? `${s.id}:1` : `${s.id}:0`,
+          )
+          .join(",")
+      : "";
+    const phraseWaveUnlocked = Boolean(
+      renderedLoop && phraseWaveformEditUnlockedById[renderedLoop.id],
+    );
+    /**
+     * Desktop phrase waveform resize handles whenever the inspector unlocks phrase
+     * boundaries — independent of `regionContextActive`. Previously we tied handles to
+     * `!regionContextActive`, which made resize impossible whenever a focus segment
+     * was selected (the common case while editing focus regions). Stacking + CSS
+     * (`pointer-events` on `.woodshed-region-editing`) keep segment clicks usable.
+     */
+    const phraseWaveResizeEnabled =
+      phraseWaveUnlocked && !isMobilePractice;
+    const phraseHandleDiagActive =
+      phraseWaveResizeEnabled && phraseHandleDiagnosticsEnabled();
+    if (containerRef.current) {
+      if (phraseHandleDiagActive) {
+        containerRef.current.dataset.phraseHandleDebug = "true";
+      } else {
+        delete containerRef.current.dataset.phraseHandleDebug;
+      }
+    }
+    /**
+     * Keep the active phrase region mounted while desktop phrase waveform editing is
+     * unlocked — WaveSurfer's virtualAppend would otherwise detach it when zoomed/panned.
+     * See `lib/wavesurfer-regions-virtual-append-phrase-pin.ts`.
+     */
+    setActivePhraseRegionVirtualAppendPin({
+      pinActive: Boolean(renderedLoop && phraseWaveUnlocked && !isMobilePractice),
+      pinnedLoopId: renderedLoop?.id ?? null,
+    });
+    if (process.env.NODE_ENV === "development" && renderedLoop) {
+      console.log("[Woodshed phrase pin] render-state", {
+        renderedLoopId: renderedLoop.id,
+        phraseWaveUnlocked,
+        phraseWaveResizeEnabled,
+        isMobilePractice,
+      });
+    }
     const signature = renderedLoop
-      ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|${
-          renderedLoop.id === editableLoopId ? "edit" : "lock"
-        }|m:${isMobilePractice ? "1" : "0"}|seg:${segSig}|sel:${mobileFocusChipSelectedId ?? ""}`
+      ? `${renderedLoop.id}|${renderedLoop.start.toFixed(4)}|${renderedLoop.end.toFixed(4)}|ph:${
+          phraseWaveResizeEnabled ? "edit" : "lock"
+        }|m:${isMobilePractice ? "1" : "0"}|seg:${segSig}|segU:${segUnlockSig}|sel:${mobileFocusChipSelectedId ?? ""}`
       : `empty|m:${isMobilePractice ? "1" : "0"}`;
     if (signature === loopsSignature.current) {
       return;
     }
     loopsSignature.current = signature;
 
+    phraseHandleDiagCleanupRef.current?.();
+    phraseHandleDiagCleanupRef.current = null;
+
     regions.clearRegions();
-    const renderable = renderedLoop ? [renderedLoop] : [];
-    renderable.forEach((loop) => {
-      const isEditing = loop.id === editableLoopId;
-      const isActive = loop.id === activeLoopId;
-      const allowResize = isEditing && !isMobilePractice;
+    if (process.env.NODE_ENV === "development") {
+      logWaveformLifecycle("regions-effect:after-clear", {
+        ws,
+        host: containerRef.current,
+        regions,
+        wsDiagId: null,
+      });
+    }
+
+    const applyPhraseHandleInteractivity = (el: HTMLElement) => {
+      /**
+       * WaveSurfer internals render in shadow DOM, so app-level descendant selectors
+       * from globals.css cannot reliably style phrase handles. Set explicit inline
+       * styles on the live handle nodes while phrase resize is unlocked.
+       */
+      const handles = Array.from(
+        el.querySelectorAll('[part*="region-handle"]'),
+      ).filter((n): n is HTMLElement => n instanceof HTMLElement);
+      for (const handle of handles) {
+        handle.style.pointerEvents = "auto";
+        handle.style.cursor = "ew-resize";
+        handle.style.zIndex = "3";
+      }
+    };
+    let focusProbeLogged = false;
+
+    const addFocusRegionOverlays = () => {
+      const segmentMobileReadonly = isMobilePractice;
+      if (!renderedLoop?.segments?.length) return;
+      for (const seg of renderedLoop.segments) {
+        const selected = seg.id === mobileFocusChipSelectedId;
+        const waveformUnlocked = Boolean(
+          focusRegionWaveformEditUnlockedById[seg.id],
+        );
+        const allowSegResize =
+          !segmentMobileReadonly &&
+          selected &&
+          waveformUnlocked;
+        const sreg = regions.addRegion({
+          id: `seg:${seg.id}`,
+          start: seg.startTime,
+          end: seg.endTime,
+          color:
+            segmentMobileReadonly && selected
+              ? "rgba(196, 181, 253, 0.20)"
+              : segmentMobileReadonly
+                ? "rgba(100, 116, 139, 0.055)"
+                : selected
+                  ? "rgba(148, 163, 184, 0.11)"
+                  : "rgba(100, 116, 139, 0.045)",
+          /** Move whole region off — only phrase-level editing uses full drag. */
+          drag: false,
+          resize: allowSegResize,
+        }) as RegionHandle & { element?: HTMLElement | null };
+
+        requestAnimationFrame(() => {
+          const el = sreg.element;
+          if (!el) return;
+          el.classList.add("woodshed-region-segment");
+          if (process.env.NODE_ENV === "development" && !focusProbeLogged) {
+            focusProbeLogged = true;
+            logRegionElementMountProbe({
+              label: "focus-region-path",
+              regionId: `seg:${seg.id}`,
+              element: el,
+              ws,
+            });
+          }
+          if (segmentMobileReadonly) {
+            el.classList.add("woodshed-region-segment-readonly");
+            if (selected) {
+              el.classList.add("woodshed-region-segment-selected");
+            }
+            el.style.pointerEvents = "none";
+          } else {
+            el.style.pointerEvents = "auto";
+            if (allowSegResize) {
+              el.classList.add("woodshed-region-segment-editable");
+            }
+          }
+        });
+
+        if (!segmentMobileReadonly) {
+          sreg.on("click", () => {
+            useWoodshedStore
+              .getState()
+              .selectSegment(renderedLoop.id, seg.id);
+          });
+        }
+
+        if (allowSegResize) {
+          sreg.on("update-end", (payload: unknown) => {
+            const updated =
+              typeof payload === "object" && payload && "region" in (payload as object)
+                ? ((payload as { region?: RegionHandle }).region ?? sreg)
+                : sreg;
+            const regionStart =
+              typeof (updated as { start?: number }).start === "number"
+                ? (updated as { start: number }).start
+                : sreg.start;
+            const regionEnd =
+              typeof (updated as { end?: number }).end === "number"
+                ? (updated as { end: number }).end
+                : sreg.end;
+            useWoodshedStore.getState().updateSegment(renderedLoop.id, seg.id, {
+              startTime: regionStart,
+              endTime: regionEnd,
+            });
+          });
+        }
+      }
+    };
+
+    const addActivePhraseRegion = () => {
+      if (!renderedLoop) return;
+      const loop = renderedLoop;
+      const isEditing = phraseWaveResizeEnabled;
+      const isActive = loop.id === activeLoopId && !isEditing;
+      const allowResize = phraseWaveResizeEnabled;
       const region = regions.addRegion({
         id: loop.id,
         start: loop.start,
@@ -987,13 +1237,29 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           : isActive
             ? "rgba(196, 181, 253, 0.10)"
             : "rgba(100,116,139,0.10)",
-        drag: allowResize,
+        /** Match focus regions: resize handles only (no whole-phrase drag). */
+        drag: false,
         resize: allowResize,
       }) as RegionHandle & { element?: HTMLElement | null };
+      if (process.env.NODE_ENV === "development") {
+        console.log("[Woodshed phrase pin] phrase region added", {
+          regionId: loop.id,
+          allowResize,
+          hasElementObject: Boolean(region.element),
+        });
+      }
 
       requestAnimationFrame(() => {
         const el = region.element;
         if (!el) return;
+        if (process.env.NODE_ENV === "development") {
+          logRegionElementMountProbe({
+            label: "phrase-region-path",
+            regionId: loop.id,
+            element: el,
+            ws,
+          });
+        }
         const className = isEditing
           ? "woodshed-region-editing"
           : isActive
@@ -1002,6 +1268,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         el.classList.add(className);
         if (isMobilePractice) {
           el.style.pointerEvents = "none";
+        } else if (allowResize) {
+          /** Keep phrase body pass-through while leaving handles interactive. */
+          el.style.pointerEvents = "none";
+          applyPhraseHandleInteractivity(el);
         } else {
           el.style.pointerEvents = "";
         }
@@ -1030,50 +1300,31 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           .getState()
           .updateLoopBounds(loop.id, regionStart, regionEnd);
       });
-    });
 
-    const segmentMobileReadonly = isMobilePractice;
-    if (renderedLoop?.segments?.length) {
-      for (const seg of renderedLoop.segments) {
-        const selected = seg.id === mobileFocusChipSelectedId;
-        const sreg = regions.addRegion({
-          id: `seg:${seg.id}`,
-          start: seg.startTime,
-          end: seg.endTime,
-          color:
-            segmentMobileReadonly && selected
-              ? "rgba(196, 181, 253, 0.20)"
-              : segmentMobileReadonly
-                ? "rgba(100, 116, 139, 0.055)"
-                : selected
-                  ? "rgba(148, 163, 184, 0.11)"
-                  : "rgba(100, 116, 139, 0.045)",
-          drag: false,
-          resize: false,
-        }) as RegionHandle & { element?: HTMLElement | null };
-
-        requestAnimationFrame(() => {
-          const el = sreg.element;
-          if (!el) return;
-          el.classList.add("woodshed-region-segment");
-          if (segmentMobileReadonly) {
-            el.classList.add("woodshed-region-segment-readonly");
-            if (selected) {
-              el.classList.add("woodshed-region-segment-selected");
-            }
-            el.style.pointerEvents = "none";
-          } else {
-            el.style.pointerEvents = "auto";
-          }
+      if (phraseHandleDiagActive) {
+        phraseHandleDiagCleanupRef.current = schedulePhraseHandleDiagnostics({
+          regionId: loop.id,
+          region,
+          ws,
+          regionsPlugin: regions as unknown as { regionsContainer?: HTMLElement | null },
+          host: containerRef.current,
         });
+      }
+    };
 
-        if (!segmentMobileReadonly) {
-          sreg.on("click", () => {
-            useWoodshedStore
-              .getState()
-              .selectSegment(renderedLoop.id, seg.id);
-          });
-        }
+    /**
+     * When phrase resize is enabled, register the phrase region *after* focus overlays
+     * so it sits on top (handles stay reachable). The editing phrase root uses
+     * `pointer-events: none` in CSS so clicks pass through to segments except on handles.
+     * When locked, phrase stays under segments so phrase clicks select the phrase first.
+     */
+    if (renderedLoop) {
+      if (phraseWaveResizeEnabled) {
+        addFocusRegionOverlays();
+        addActivePhraseRegion();
+      } else {
+        addActivePhraseRegion();
+        addFocusRegionOverlays();
       }
     }
 
@@ -1114,7 +1365,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         useWoodshedStore.getState().setHoverTime(null),
       );
     }
-  }, [loops, activeLoopId, editableLoopId, isMobilePractice, activeSegmentId, mobileFocusChipSelectedId]);
+  }, [
+    loops,
+    activeLoopId,
+    isMobilePractice,
+    activeSegmentId,
+    regionContextActive,
+    mobileFocusChipSelectedId,
+    focusRegionWaveformEditUnlockedById,
+    phraseWaveformEditUnlockedById,
+  ]);
+
+  useEffect(() => {
+    const host = containerRef.current;
+    return () => {
+      phraseHandleDiagCleanupRef.current?.();
+      phraseHandleDiagCleanupRef.current = null;
+      if (host) {
+        delete host.dataset.phraseHandleDebug;
+      }
+    };
+  }, []);
 
   const ingestFile = useCallback(async (blob: Blob) => {
     const ws = wavesurferRef.current;
@@ -1951,4 +2222,133 @@ function installWaveformPanGesture(
     container.style.cursor = "";
     container.classList.remove("is-panning");
   };
+}
+
+const WS_DIAG_KEY = "__woodshedWsDiagIds";
+const WS_DIAG_NEXT_KEY = "__woodshedWsDiagNextId";
+
+function registerWaveSurferDiagInstance(): number {
+  const bag = globalThis as unknown as Record<string, unknown>;
+  const nextRaw = bag[WS_DIAG_NEXT_KEY];
+  const next = typeof nextRaw === "number" ? nextRaw + 1 : 1;
+  bag[WS_DIAG_NEXT_KEY] = next;
+  const setRaw = bag[WS_DIAG_KEY];
+  const set =
+    setRaw instanceof Set ? (setRaw as Set<number>) : new Set<number>();
+  set.add(next);
+  bag[WS_DIAG_KEY] = set;
+  return next;
+}
+
+function unregisterWaveSurferDiagInstance(): void {
+  const bag = globalThis as unknown as Record<string, unknown>;
+  const setRaw = bag[WS_DIAG_KEY];
+  if (!(setRaw instanceof Set)) return;
+  const set = setRaw as Set<number>;
+  const arr = Array.from(set);
+  if (arr.length === 0) return;
+  set.delete(arr[arr.length - 1]);
+}
+
+function listWaveSurferDiagInstances(): number[] {
+  const bag = globalThis as unknown as Record<string, unknown>;
+  const setRaw = bag[WS_DIAG_KEY];
+  return setRaw instanceof Set ? Array.from(setRaw as Set<number>) : [];
+}
+
+function nodeChain(node: Node | null): string[] {
+  const out: string[] = [];
+  let cur: Node | null = node;
+  for (let i = 0; i < 10 && cur; i++) {
+    if (cur instanceof HTMLElement) {
+      out.push(
+        `${cur.tagName.toLowerCase()}#${cur.id || "-"}.${
+          cur.className || "-"
+        }[part=${cur.getAttribute("part") || "-"}][connected=${cur.isConnected}]`,
+      );
+      cur = cur.parentNode;
+      continue;
+    }
+    out.push(cur.nodeName);
+    break;
+  }
+  return out;
+}
+
+function collectWaveformPartCounts(doc: Document): {
+  waveformHosts: number;
+  wrapperPartsInShadows: number;
+  regionsPartsInShadows: number;
+} {
+  const hosts = Array.from(
+    doc.querySelectorAll('[data-testid="primary-waveform"]'),
+  );
+  let wrappers = 0;
+  let regions = 0;
+  for (const host of hosts) {
+    const root = host.shadowRoot;
+    if (!root) continue;
+    wrappers += root.querySelectorAll('[part="wrapper"]').length;
+    regions += root.querySelectorAll('[part="regions-container"]').length;
+  }
+  return {
+    waveformHosts: hosts.length,
+    wrapperPartsInShadows: wrappers,
+    regionsPartsInShadows: regions,
+  };
+}
+
+function logWaveformLifecycle(
+  label: string,
+  args: {
+    ws: WaveSurfer | null;
+    host: HTMLElement | null;
+    regions: RegionsHandle | null;
+    wsDiagId: number | null;
+  },
+): void {
+  if (process.env.NODE_ENV !== "development") return;
+  const host = args.host;
+  const ws = args.ws;
+  const regionsUnknown = args.regions as unknown as {
+    regionsContainer?: HTMLElement | null;
+  } | null;
+  const renderer = ws
+    ? (ws.getRenderer() as unknown as {
+        getWrapper?: () => HTMLElement;
+        scrollContainer?: HTMLElement | null;
+      })
+    : null;
+  const wrapper = renderer?.getWrapper?.() ?? null;
+  const scrollContainer = renderer?.scrollContainer ?? null;
+  const regionsContainer = regionsUnknown?.regionsContainer ?? null;
+  const doc =
+    host?.ownerDocument ??
+    wrapper?.ownerDocument ??
+    regionsContainer?.ownerDocument ??
+    document;
+  const counts = collectWaveformPartCounts(doc);
+
+  console.log("[Woodshed ws lifecycle]", {
+    label,
+    wsDiagId: args.wsDiagId,
+    activeWsDiagIds: listWaveSurferDiagInstances(),
+    hostConnected: host?.isConnected ?? false,
+    hostInBody: Boolean(host && doc.body.contains(host)),
+    hostChain: nodeChain(host),
+    hostHasShadowRoot: Boolean(host?.shadowRoot),
+    wrapperConnected: wrapper?.isConnected ?? false,
+    wrapperInBody: Boolean(wrapper && doc.body.contains(wrapper)),
+    wrapperChain: nodeChain(wrapper),
+    scrollContainerConnected: scrollContainer?.isConnected ?? false,
+    scrollContainerInBody: Boolean(scrollContainer && doc.body.contains(scrollContainer)),
+    scrollContainerChain: nodeChain(scrollContainer),
+    regionsContainerConnected: regionsContainer?.isConnected ?? false,
+    regionsContainerInBody: Boolean(regionsContainer && doc.body.contains(regionsContainer)),
+    regionsContainerChain: nodeChain(regionsContainer),
+    wrapperContainsRegions: Boolean(
+      wrapper && regionsContainer && wrapper.contains(regionsContainer),
+    ),
+    counts,
+  });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Lock, LockOpen, Plus, Trash2 } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -63,6 +63,10 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
     updateSegment,
     removeSegment,
     addLoopCandidate,
+    focusRegionWaveformEditUnlockedById,
+    setFocusRegionWaveformEditUnlocked,
+    phraseWaveformEditUnlockedById,
+    setPhraseWaveformEditUnlocked,
   } = useWoodshedStore(
     useShallow((s) => {
       const activeLoop =
@@ -93,6 +97,10 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
         updateSegment: s.updateSegment,
         removeSegment: s.removeSegment,
         addLoopCandidate: s.addLoopCandidate,
+        focusRegionWaveformEditUnlockedById: s.focusRegionWaveformEditUnlockedById,
+        setFocusRegionWaveformEditUnlocked: s.setFocusRegionWaveformEditUnlocked,
+        phraseWaveformEditUnlockedById: s.phraseWaveformEditUnlockedById,
+        setPhraseWaveformEditUnlocked: s.setPhraseWaveformEditUnlocked,
       };
     }),
   );
@@ -150,6 +158,15 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
     activeLoop && activeLoop.end > activeLoop.start
       ? Math.round((activeLoop.end - activeLoop.start) * 10) / 10
       : 0;
+
+  const focusRegionWaveformUnlocked = Boolean(
+    activeSegment &&
+      focusRegionWaveformEditUnlockedById[activeSegment.id],
+  );
+
+  const phraseWaveformUnlocked = Boolean(
+    activeLoop && phraseWaveformEditUnlockedById[activeLoop.id],
+  );
 
   const body = (() => {
     if (!duration) {
@@ -247,6 +264,51 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               your last-used region in the phrase.
             </p>
           </div>
+          <div className="flex items-center justify-between gap-2 rounded border border-stone-800/55 bg-stone-950/40 px-2 py-1.5">
+            <div className="min-w-0">
+              <p className="text-[9px] font-medium uppercase tracking-[0.16em] text-stone-600">
+                Waveform boundaries
+              </p>
+              <p className="mt-0.5 text-[10px] leading-snug text-stone-500">
+                {focusRegionWaveformUnlocked
+                  ? "Unlocked — drag the vertical handles on the wave."
+                  : "Locked — handles hidden; playback unchanged."}
+              </p>
+            </div>
+            <button
+              type="button"
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors",
+                focusRegionWaveformUnlocked
+                  ? "border-amber-500/35 bg-amber-500/10 text-amber-100/90 hover:bg-amber-500/15"
+                  : "border-violet-500/35 bg-violet-500/10 text-violet-100/90 hover:bg-violet-500/16",
+              )}
+              title={
+                focusRegionWaveformUnlocked
+                  ? "Lock waveform boundaries"
+                  : "Unlock to drag start/end on the waveform"
+              }
+              aria-pressed={focusRegionWaveformUnlocked}
+              onClick={() =>
+                setFocusRegionWaveformEditUnlocked(
+                  activeSegment.id,
+                  !focusRegionWaveformUnlocked,
+                )
+              }
+            >
+              {focusRegionWaveformUnlocked ? (
+                <>
+                  <Lock className="h-3 w-3 opacity-90" aria-hidden />
+                  Lock
+                </>
+              ) : (
+                <>
+                  <LockOpen className="h-3 w-3 opacity-90" aria-hidden />
+                  Edit
+                </>
+              )}
+            </button>
+          </div>
           <div className="flex gap-2">
             <label className="flex flex-1 flex-col gap-0.5">
               <span className="text-[9px] uppercase tracking-wider text-stone-600">
@@ -255,6 +317,12 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               <input
                 inputMode="decimal"
                 value={segStartDraft}
+                readOnly={!focusRegionWaveformUnlocked}
+                title={
+                  focusRegionWaveformUnlocked
+                    ? undefined
+                    : "Unlock waveform boundaries to edit"
+                }
                 onChange={(e) => setSegStartDraft(e.target.value)}
                 onBlur={() => {
                   const v = Number.parseFloat(segStartDraft);
@@ -266,7 +334,11 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
                     setSegStartDraft(activeSegment.startTime.toFixed(2));
                   }
                 }}
-                className="rounded border border-stone-800/60 bg-stone-950/50 px-1.5 py-1 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-violet-500/40"
+                className={cn(
+                  "rounded border border-stone-800/60 bg-stone-950/50 px-1.5 py-1 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-violet-500/40",
+                  !focusRegionWaveformUnlocked &&
+                    "cursor-not-allowed opacity-55 ring-0",
+                )}
               />
             </label>
             <label className="flex flex-1 flex-col gap-0.5">
@@ -276,6 +348,12 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               <input
                 inputMode="decimal"
                 value={segEndDraft}
+                readOnly={!focusRegionWaveformUnlocked}
+                title={
+                  focusRegionWaveformUnlocked
+                    ? undefined
+                    : "Unlock waveform boundaries to edit"
+                }
                 onChange={(e) => setSegEndDraft(e.target.value)}
                 onBlur={() => {
                   const v = Number.parseFloat(segEndDraft);
@@ -287,7 +365,11 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
                     setSegEndDraft(activeSegment.endTime.toFixed(2));
                   }
                 }}
-                className="rounded border border-stone-800/60 bg-stone-950/50 px-1.5 py-1 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-violet-500/40"
+                className={cn(
+                  "rounded border border-stone-800/60 bg-stone-950/50 px-1.5 py-1 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-violet-500/40",
+                  !focusRegionWaveformUnlocked &&
+                    "cursor-not-allowed opacity-55 ring-0",
+                )}
               />
             </label>
           </div>
@@ -344,6 +426,52 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
             <span className="text-stone-600"> · </span>
             {phraseSpanSec}s
           </p>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 rounded border border-stone-800/55 bg-stone-950/40 px-2 py-1.5">
+          <div className="min-w-0">
+            <p className="text-[9px] font-medium uppercase tracking-[0.16em] text-stone-600">
+              Phrase waveform boundaries
+            </p>
+            <p className="mt-0.5 text-[10px] leading-snug text-stone-500">
+              {phraseWaveformUnlocked
+                ? "Unlocked — drag the vertical handles on the phrase region."
+                : "Locked — handles hidden; playback unchanged."}
+            </p>
+          </div>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors",
+              phraseWaveformUnlocked
+                ? "border-amber-500/35 bg-amber-500/10 text-amber-100/90 hover:bg-amber-500/15"
+                : "border-violet-500/35 bg-violet-500/10 text-violet-100/90 hover:bg-violet-500/16",
+            )}
+            title={
+              phraseWaveformUnlocked
+                ? "Lock phrase waveform boundaries"
+                : "Unlock to drag phrase start/end on the waveform"
+            }
+            aria-pressed={phraseWaveformUnlocked}
+            onClick={() =>
+              setPhraseWaveformEditUnlocked(
+                activeLoop.id,
+                !phraseWaveformUnlocked,
+              )
+            }
+          >
+            {phraseWaveformUnlocked ? (
+              <>
+                <Lock className="h-3 w-3 opacity-90" aria-hidden />
+                Lock
+              </>
+            ) : (
+              <>
+                <LockOpen className="h-3 w-3 opacity-90" aria-hidden />
+                Edit
+              </>
+            )}
+          </button>
         </div>
 
         <label className="block">

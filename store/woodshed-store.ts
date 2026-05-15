@@ -38,6 +38,8 @@ export type WoodshedState = {
    * - Only one loop is ever editable at a time.
    * - Selecting a different loop auto-finalizes the previous editable one.
    * Separation of concerns: `activeLoopId` = practice focus; `editableLoopId` = edit focus.
+   * Kept in sync with `phraseWaveformEditUnlockedById` for phrase waveform handles
+   * (inspector Lock / Edit, transport, sidebar).
    */
   editableLoopId: string | null;
   isPlaying: boolean;
@@ -72,6 +74,19 @@ export type WoodshedState = {
    * selected in the inspector).
    */
   lastPracticeSegmentIdByPhrase: Record<string, string>;
+  /**
+   * Desktop-only session UI: focus region ids allowed to drag-resize start/end
+   * on the main waveform. Key present with `true` = unlocked; absent = locked.
+   * Not persisted in project files.
+   */
+  focusRegionWaveformEditUnlockedById: Record<string, true>;
+  /**
+   * Desktop-only session UI: phrase (loop) ids allowed to drag-resize phrase
+   * start/end on the main waveform. Sparse `true` = unlocked. Kept in sync with
+   * `editableLoopId` for sidebar/transport; cleared when changing phrase selection
+   * without preserving edit. Not persisted in project files.
+   */
+  phraseWaveformEditUnlockedById: Record<string, true>;
 };
 
 type WoodshedActions = {
@@ -133,6 +148,19 @@ type WoodshedActions = {
     >,
   ) => void;
   removeSegment: (phraseId: string, segmentId: string) => void;
+  /**
+   * Desktop: allow or forbid waveform handle editing for this focus region.
+   * `false` removes the id from the sparse unlock map (locked).
+   */
+  setFocusRegionWaveformEditUnlocked: (
+    segmentId: string,
+    unlocked: boolean,
+  ) => void;
+  /**
+   * Desktop: phrase waveform boundary lock (mirrors focus-region waveform control).
+   * Unlock sets this as the only unlocked phrase and aligns `editableLoopId`.
+   */
+  setPhraseWaveformEditUnlocked: (loopId: string, unlocked: boolean) => void;
   requestInspectorSegmentFieldFocus: () => void;
   /**
    * After project hydration — restore validated practice prefs (loop mode, focus map).
@@ -167,6 +195,8 @@ const initialState: WoodshedState = {
   activeSegmentId: null,
   inspectorFocusRequestId: 0,
   lastPracticeSegmentIdByPhrase: {},
+  focusRegionWaveformEditUnlockedById: {},
+  phraseWaveformEditUnlockedById: {},
 };
 
 function clampUi(value: number, lo: number, hi: number) {
@@ -182,6 +212,8 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       loopPracticeScope: "phrase",
       inspectorFocusRequestId: 0,
       lastPracticeSegmentIdByPhrase: {},
+      focusRegionWaveformEditUnlockedById: {},
+      phraseWaveformEditUnlockedById: {},
     }),
   bootstrapFromDuration: (duration) => {
     const loop = createInitialLoop(duration);
@@ -191,6 +223,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       activeLoopId: loop.id,
       /** Bootstrap loops are brand-new — start in draft so the user can refine immediately. */
       editableLoopId: loop.id,
+      phraseWaveformEditUnlockedById: { [loop.id]: true },
       loopPlaybackEnabled: true,
       loopPracticeScope: "phrase",
       loopFocusTick: state.loopFocusTick + 1,
@@ -278,6 +311,8 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       loopPracticeScope: "phrase",
       inspectorFocusRequestId: 0,
       lastPracticeSegmentIdByPhrase: {},
+      focusRegionWaveformEditUnlockedById: {},
+      phraseWaveformEditUnlockedById: {},
     }),
   addLoopCandidate: () => {
     const { duration, loops, activeLoopId } = get();
@@ -296,6 +331,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       activeLoopId: created.id,
       /** Brand-new loop → enter draft so the user can shape it immediately. */
       editableLoopId: created.id,
+      phraseWaveformEditUnlockedById: { [created.id]: true },
       loopPlaybackEnabled: true,
       loopPracticeScope: "phrase",
       loopFocusTick: state.loopFocusTick + 1,
@@ -321,6 +357,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       activeLoopId: phrase.id,
       /** Brand-new loop → enter draft so the user can shape it immediately. */
       editableLoopId: phrase.id,
+      phraseWaveformEditUnlockedById: { [phrase.id]: true },
       loopPlaybackEnabled: true,
       loopPracticeScope: "phrase",
       loopFocusTick: s.loopFocusTick + 1,
@@ -347,6 +384,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
           loopFocusTick: s.loopFocusTick + 1,
           activeSegmentId: null,
           loopPracticeScope: "phrase",
+          phraseWaveformEditUnlockedById: {},
         };
       }
       const loop = s.loops.find((l) => l.id === activeLoopId);
@@ -359,6 +397,14 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         keepSegment && hasRegions
           ? s.loopPracticeScope
           : "phrase";
+      const nextPhraseUnlock: Record<string, true> = {};
+      if (
+        nextEditable != null &&
+        activeLoopId === nextEditable &&
+        s.phraseWaveformEditUnlockedById[activeLoopId]
+      ) {
+        nextPhraseUnlock[activeLoopId] = true;
+      }
       return {
         activeLoopId,
         editableLoopId: nextEditable,
@@ -366,6 +412,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
         activeSegmentId: keepSegment ? s.activeSegmentId : null,
         loopPracticeScope,
+        phraseWaveformEditUnlockedById: nextPhraseUnlock,
         ...(!playback ? { viewportMode: "follow" as const } : {}),
       };
     }),
@@ -404,6 +451,14 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         delete next[id];
         return next;
       };
+      const removedLoop = s.loops.find((l) => l.id === id);
+      const pruneUnlockForLoop = (m: Record<string, true>) => {
+        const segIds = removedLoop?.segments?.map((x) => x.id) ?? [];
+        if (!segIds.length) return m;
+        const next = { ...m };
+        for (const sid of segIds) delete next[sid];
+        return next;
+      };
       const next = s.loops.filter((l) => l.id !== id);
       const activeRemoved = s.activeLoopId === id;
       /** If the editable loop got removed, exit edit mode. */
@@ -420,12 +475,16 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
           activeSegmentId: null,
           loopPracticeScope: "phrase",
           lastPracticeSegmentIdByPhrase: {},
+          focusRegionWaveformEditUnlockedById: {},
+          phraseWaveformEditUnlockedById: {},
         };
       }
       if (!activeRemoved) {
         const removedHadActiveSegment = s.loops
           .find((l) => l.id === id)
           ?.segments?.some((seg) => seg.id === s.activeSegmentId);
+        const nextPhrase = { ...s.phraseWaveformEditUnlockedById };
+        delete nextPhrase[id];
         return {
           loops: next,
           activeLoopId: nextActive,
@@ -437,12 +496,18 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
           lastPracticeSegmentIdByPhrase: pruneLast(
             s.lastPracticeSegmentIdByPhrase,
           ),
+          focusRegionWaveformEditUnlockedById: pruneUnlockForLoop(
+            s.focusRegionWaveformEditUnlockedById,
+          ),
+          phraseWaveformEditUnlockedById: nextPhrase,
         };
       }
       const naLoop = nextActive
         ? next.find((l) => l.id === nextActive)
         : undefined;
       const playback = Boolean(naLoop && naLoop.end > naLoop.start);
+      const nextPhrase = { ...s.phraseWaveformEditUnlockedById };
+      delete nextPhrase[id];
       return {
         loops: next,
         activeLoopId: nextActive,
@@ -454,20 +519,40 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         lastPracticeSegmentIdByPhrase: pruneLast(
           s.lastPracticeSegmentIdByPhrase,
         ),
+        focusRegionWaveformEditUnlockedById: pruneUnlockForLoop(
+          s.focusRegionWaveformEditUnlockedById,
+        ),
+        phraseWaveformEditUnlockedById: nextPhrase,
         ...(!playback ? { viewportMode: "follow" as const } : {}),
       };
     }),
   setEditableLoopId: (id) =>
     set((s) => {
-      if (id === null) return { editableLoopId: null };
+      if (id === null) {
+        const prev = s.editableLoopId;
+        const nextPhrase = { ...s.phraseWaveformEditUnlockedById };
+        if (prev) delete nextPhrase[prev];
+        return { editableLoopId: null, phraseWaveformEditUnlockedById: nextPhrase };
+      }
       const exists = s.loops.some((l) => l.id === id);
-      return exists ? { editableLoopId: id } : {};
+      if (!exists) return {};
+      return {
+        editableLoopId: id,
+        phraseWaveformEditUnlockedById: { [id]: true },
+      };
     }),
   nudgeLoopEdge: (edge, deltaSec) => {
-    const { activeLoopId, loops, duration } = get();
+    const { activeLoopId, loops, duration, phraseWaveformEditUnlockedById, activeSegmentId } =
+      get();
     if (!activeLoopId || !duration) return;
+    if (!phraseWaveformEditUnlockedById[activeLoopId]) return;
     const loop = loops.find((l) => l.id === activeLoopId);
     if (!loop) return;
+    const focusRegionDetailActive = Boolean(
+      activeSegmentId &&
+        loop.segments?.some((s) => s.id === activeSegmentId),
+    );
+    if (focusRegionDetailActive) return;
     if (edge === "start") {
       get().updateLoopBounds(loop.id, loop.start + deltaSec, loop.end);
     } else {
@@ -568,6 +653,10 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
           ...s.lastPracticeSegmentIdByPhrase,
           [phraseId]: created.id,
         },
+        focusRegionWaveformEditUnlockedById: {
+          ...s.focusRegionWaveformEditUnlockedById,
+          [created.id]: true,
+        },
       };
     }),
   updateSegment: (phraseId, segmentId, patch) =>
@@ -614,6 +703,8 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       if (nextSegs.length === 0) {
         loopPracticeScope = "phrase";
       }
+      const nextUnlock = { ...s.focusRegionWaveformEditUnlockedById };
+      delete nextUnlock[segmentId];
       return {
         loops: s.loops.map((l) =>
           l.id === phraseId ? { ...l, segments: nextSegs } : l,
@@ -621,6 +712,31 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         activeSegmentId: cleared ? null : s.activeSegmentId,
         loopPracticeScope,
         lastPracticeSegmentIdByPhrase: nextLast,
+        focusRegionWaveformEditUnlockedById: nextUnlock,
+      };
+    }),
+  setFocusRegionWaveformEditUnlocked: (segmentId, unlocked) =>
+    set((s) => {
+      const next = { ...s.focusRegionWaveformEditUnlockedById };
+      if (unlocked) next[segmentId] = true;
+      else delete next[segmentId];
+      return { focusRegionWaveformEditUnlockedById: next };
+    }),
+  setPhraseWaveformEditUnlocked: (loopId, unlocked) =>
+    set((s) => {
+      if (!s.loops.some((l) => l.id === loopId)) return {};
+      if (unlocked) {
+        return {
+          phraseWaveformEditUnlockedById: { [loopId]: true },
+          editableLoopId: loopId,
+        };
+      }
+      const next = { ...s.phraseWaveformEditUnlockedById };
+      delete next[loopId];
+      const nextEditable = s.editableLoopId === loopId ? null : s.editableLoopId;
+      return {
+        phraseWaveformEditUnlockedById: next,
+        editableLoopId: nextEditable,
       };
     }),
   requestInspectorSegmentFieldFocus: () =>
