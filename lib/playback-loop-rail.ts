@@ -1,4 +1,4 @@
-import type { LoopRail } from "@/lib/audio-engine";
+import type { LoopRail, MediaPlaybackSurface } from "@/lib/audio-engine";
 import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import type { PracticeLoop } from "@/lib/loop-engine";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
@@ -62,4 +62,23 @@ export function getRestartSeekSeconds(args: {
   });
   if (seg && seg.endTime > seg.startTime) return seg.startTime;
   return loop.start;
+}
+
+/**
+ * Tight-loop boundary warp shared by WaveSurfer's RAF loop (inline duplicate today)
+ * and Phase 5 (`components/youtube-workspace.tsx`).
+ *
+ * Keeps playback inside `[rail.start, rail.end]` when looping is enabled — identical math,
+ * avoids drifting past the phrase/focus end before the next poll.
+ */
+export function warpPlaybackToLoopRailIfNeeded(
+  surface: Pick<MediaPlaybackSurface, "getCurrentTime" | "seek">,
+  snapshot: PlaybackLoopRailSnapshot,
+): void {
+  const rail = buildPlaybackLoopRail(snapshot);
+  const t = surface.getCurrentTime();
+  if (!rail.enabled || !(rail.end > rail.start)) return;
+  if (t >= rail.end || t + 1e-4 < rail.start) {
+    surface.seek(rail.start);
+  }
 }
