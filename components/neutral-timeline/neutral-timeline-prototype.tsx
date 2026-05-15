@@ -21,6 +21,7 @@ import {
   timelineScrollWidthPx,
   timelineViewportRatios,
 } from "@/components/neutral-timeline/timeline-coordinates";
+import { SyntheticWaveBedCanvas } from "@/components/neutral-timeline/synthetic-wave-bed-canvas";
 
 export type NeutralTimelinePrototypeProps = {
   duration: number;
@@ -35,9 +36,11 @@ export type NeutralTimelinePrototypeProps = {
 };
 
 const RULER_H = 26;
+/** Track band under ruler — matches inner content `height: RULER_H + TRACK_BAND_PX`. */
+const TRACK_BAND_PX = 52;
 const PAN_SLOP_PX = 4;
 
-/** Phase 3 prototype — DAW-style ruler strip (no waveform peaks). */
+/** Phase 3 prototype — DAW-style ruler strip + Phase 3B decorative synthetic bed (flag-gated at workspace). */
 export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
   props: NeutralTimelinePrototypeProps,
 ) {
@@ -257,9 +260,15 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       className="border-b border-stone-800/80 bg-[#070605] px-3 py-2 sm:px-4"
       aria-label="Neutral timeline prototype (development)"
     >
-      <div className="mb-1 flex flex-wrap items-center gap-2">
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="select-none text-[10px] font-medium uppercase tracking-[0.14em] text-stone-500">
           Neutral timeline prototype
+        </span>
+        <span
+          className="select-none text-[9px] font-normal tracking-normal text-stone-600/80"
+          title="Decorative pattern only — not from audio analysis"
+        >
+          Synthetic timeline
         </span>
         <button
           type="button"
@@ -299,7 +308,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
             className="relative cursor-crosshair select-none"
             style={{
               width: scrollWidthPx,
-              height: RULER_H + 52,
+              height: RULER_H + TRACK_BAND_PX,
             }}
           >
             {/* Ruler */}
@@ -328,9 +337,14 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
               })}
             </div>
 
-            {/* Practice Sections + Focus strips */}
+            {/* Practice Sections + Focus strips + synthetic bed (Phase 3B) */}
             <div className="absolute inset-x-0 bottom-0 top-[26px]">
-              <div className="relative h-full w-full">
+              <div className="relative h-full w-full overflow-hidden">
+                <SyntheticWaveBedCanvas
+                  widthPx={scrollWidthPx}
+                  heightPx={TRACK_BAND_PX}
+                />
+                <div className="relative z-[1] h-full w-full">
                 {loops.map((loop) => {
                   const active = loop.id === activeLoopId;
                   const left = secondsToContentPx(loop.start, pxPerSec);
@@ -381,12 +395,13 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
                 {/* Playhead */}
                 <div
-                  className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-gradient-to-b from-violet-200/95 via-violet-100 to-violet-200/95 shadow-[0_0_10px_rgba(216,180,254,0.35)]"
+                  className="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-gradient-to-b from-violet-200/95 via-violet-100 to-violet-200/95 shadow-[0_0_10px_rgba(216,180,254,0.35)]"
                   style={{
                     left: playheadPx,
                     transform: "translateX(-0.5px)",
                   }}
                 />
+                </div>
               </div>
             </div>
           </div>
