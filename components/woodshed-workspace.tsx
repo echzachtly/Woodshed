@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 import WaveSurfer from "wavesurfer.js";
@@ -96,6 +97,8 @@ import {
   phraseRegionWaveColor,
 } from "@/lib/wavesurfer-region-appearance";
 import { isWaveSurferAudioDecoded } from "@/lib/wavesurfer-audio-ready";
+import { reflowWaveSurferForContainer } from "@/lib/wavesurfer-reflow";
+import { applyWheelZoomAnchoredToCursor } from "@/lib/waveform-cursor-zoom";
 import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
 import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
 import { installShiftWaveformAuthoringGesture } from "@/lib/shift-waveform-authoring-gesture";
@@ -108,6 +111,11 @@ import { useShallow } from "zustand/react/shallow";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 /** iOS Safari: combine MIME tokens with extensions so common files stay selectable. */
+const DESKTOP_BOTTOM_STACK_PX_KEY = "woodshed-desktop-bottom-stack-px";
+const DESKTOP_BOTTOM_STACK_MIN = 112;
+const DESKTOP_WAVEFORM_MIN = 80;
+const DESKTOP_BOTTOM_STACK_MAX_FRAC = 0.58;
+
 const MOBILE_AUDIO_INPUT_ACCEPT =
   "audio/*,.mp3,.m4a,.aac,.wav,.flac,.aiff,.aif";
 
@@ -215,6 +223,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   );
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  /** Desktop: waveform column (flex child) — ResizeObserver reflows WaveSurfer when height changes. */
+  const desktopWaveformColumnRef = useRef<HTMLDivElement | null>(null);
+  const desktopSplitRef = useRef<HTMLDivElement | null>(null);
+  const desktopBottomDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startH: number;
+  } | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioBlobRef = useRef<Blob | null>(null);
@@ -246,6 +262,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     DEMO_PROJECT_DISPLAY_FALLBACK,
   );
   const [decodedPeaks, setDecodedPeaks] = useState<Float32Array | null>(null);
+  const [desktopBottomStackPx, setDesktopBottomStackPx] = useState(200);
   const [viewport, setViewport] = useState<VisibleWindow>({
     startRatio: 0,
     durationRatio: 1,
@@ -311,6 +328,125 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const isMobilePractice = useMediaQuery("(max-width: 768px)");
   mobilePracticeModeRef.current = isMobilePractice;
+
+  const desktopBottomStackPxRef = useRef(desktopBottomStackPx);
+  desktopBottomStackPxRef.current = desktopBottomStackPx;
+
+  useEffect(() => {
+    if (isMobilePractice) return;
+    try {
+      const raw = sessionStorage.getItem(DESKTOP_BOTTOM_STACK_PX_KEY);
+      const n = raw ? Number.parseInt(raw, 10) : NaN;
+      if (Number.isFinite(n) && n >= DESKTOP_BOTTOM_STACK_MIN) {
+        setDesktopBottomStackPx(n);
+      }
+    } catch {
+      /* private mode */
+    }
+  }, [isMobilePractice]);
+
+  useEffect(() => {
+    if (isMobilePractice) return;
+    const clampBottom = () => {
+      const root = desktopSplitRef.current;
+      if (!root) return;
+      const h = root.clientHeight;
+      if (h <= DESKTOP_WAVEFORM_MIN + DESKTOP_BOTTOM_STACK_MIN) return;
+      const maxBottom = Math.min(
+        Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
+        h - DESKTOP_WAVEFORM_MIN,
+      );
+      setDesktopBottomStackPx((prev) =>
+        Math.min(
+          Math.max(prev, DESKTOP_BOTTOM_STACK_MIN),
+          Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
+        ),
+      );
+    };
+    clampBottom();
+    window.addEventListener("resize", clampBottom);
+    return () => window.removeEventListener("resize", clampBottom);
+  }, [isMobilePractice]);
+
+  useEffect(() => {
+    if (isMobilePractice) return;
+    const el = desktopWaveformColumnRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    const scheduleReflow = () => {
+      cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => {
+        reflowWaveSurferForContainer(
+          wavesurferRef.current,
+          useWoodshedStore.getState().minPxPerSec,
+        );
+      });
+    };
+    const ro = new ResizeObserver(scheduleReflow);
+    ro.observe(el);
+    scheduleReflow();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [isMobilePractice, desktopBottomStackPx]);
+
+  const onDesktopBottomResizePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      desktopBottomDragRef.current = {
+        pointerId: e.pointerId,
+        startY: e.clientY,
+        startH: desktopBottomStackPxRef.current,
+      };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [],
+  );
+
+  const onDesktopBottomResizePointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const d = desktopBottomDragRef.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      const root = desktopSplitRef.current;
+      if (!root) return;
+      const h = root.clientHeight;
+      const maxBottom = Math.min(
+        Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
+        h - DESKTOP_WAVEFORM_MIN,
+      );
+      /** Drag up → taller bottom stack (pull panel up). */
+      const next = Math.min(
+        Math.max(d.startH - (e.clientY - d.startY), DESKTOP_BOTTOM_STACK_MIN),
+        Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
+      );
+      setDesktopBottomStackPx(next);
+    },
+    [],
+  );
+
+  const onDesktopBottomResizePointerUp = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const d = desktopBottomDragRef.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      desktopBottomDragRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* capture may already be released */
+      }
+      try {
+        sessionStorage.setItem(
+          DESKTOP_BOTTOM_STACK_PX_KEY,
+          String(Math.round(desktopBottomStackPxRef.current)),
+        );
+      } catch {
+        /* private mode */
+      }
+    },
+    [],
+  );
 
   /** Align chip highlight with resolver when Focus Loop was entered via loop pill only. */
   const mobileFocusChipSelectedId = useMemo(() => {
@@ -1458,16 +1594,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         "wheel",
         (event) => {
           if (mobilePracticeModeRef.current) return;
-          const target = useWoodshedStore.getState();
-          if (!wavesurferRef.current) return;
+          const ws = wavesurferRef.current;
+          if (!ws) return;
           event.preventDefault();
+          const target = useWoodshedStore.getState();
           target.exitPhraseFitAfterUserNavigation();
-          const factor = Math.exp(event.deltaY * -0.0015);
-          const next = Math.min(
-            1500,
-            Math.max(4, target.minPxPerSec * factor),
+          applyWheelZoomAnchoredToCursor(
+            ws,
+            event,
+            target.minPxPerSec,
+            target.setMinPxPerSec,
           );
-          target.setMinPxPerSec(next);
         },
         { passive: false },
       );
@@ -2136,70 +2273,130 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               onFitAll={handleResetZoomFullSong}
             />
           ) : null}
-          <div
-            className={cn(
-              "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
-              !isMobilePractice &&
-                "min-h-0 flex-1 border-0 px-3 py-2 sm:px-4 sm:py-2.5",
-              isMobilePractice &&
-                "min-h-0 flex-1 touch-manipulation border-b border-stone-800/80 px-3 py-2",
-            )}
-            data-mobile-practice={isMobilePractice ? "true" : undefined}
-          >
+          {isMobilePractice ? (
             <div
-              ref={containerRef}
-              data-testid="primary-waveform"
-              className="relative z-0 h-full w-full min-h-0"
-            />
-          </div>
-          {!isMobilePractice ? (
-            <>
-              <DesktopTransportBar
-                duration={duration}
-                currentTime={currentTime}
-                isPlaying={isPlaying}
-                loopPlaybackEnabled={loopPlaybackEnabled}
-                canEnableLoopPlayback={Boolean(
-                  activeLoop && activeLoop.end > activeLoop.start,
-                )}
-                loopPracticeScope={loopPracticeScope}
-                hasActivePhrase={Boolean(
-                  activeLoop && activeLoop.end > activeLoop.start,
-                )}
-                phraseHasFocusRegions={phraseHasFocusRegions}
-                regionContextActive={regionContextActive}
-                activeLoopId={activeLoopId}
-                editableLoopId={editableLoopId}
-                onToggleEditContext={handleTransportEditContext}
-                onDeleteContext={handleTransportDeleteContext}
-                tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-                onTogglePlay={handleTransportTogglePlay}
-                onRestartLoop={() => {
-                  const ws = wavesurferRef.current;
-                  if (!ws || !activeLoopId) return;
-                  const st = useWoodshedStore.getState();
-                  const loop = loops.find((l) => l.id === activeLoopId);
-                  if (!loop) return;
-                  ws.setTime(
-                    getRestartSeekSeconds({
-                      loop,
-                      loopPracticeScope: st.loopPracticeScope,
-                      activeSegmentId: st.activeSegmentId,
-                      lastPracticeSegmentIdByPhrase:
-                        st.lastPracticeSegmentIdByPhrase,
-                    }),
-                  );
-                  void ws.play();
-                }}
-                onCycleLoopPlaybackMode={() =>
-                  useWoodshedStore.getState().cycleLoopPlaybackMode()
-                }
-                onTempoSlider={handleTransportTempo}
-                formatTime={(t) => formatTime(t)}
+              className={cn(
+                "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                "min-h-0 flex-1 touch-manipulation border-b border-stone-800/80 px-3 py-2",
+              )}
+              data-mobile-practice="true"
+            >
+              <div
+                ref={containerRef}
+                data-testid="primary-waveform"
+                className="relative z-0 h-full w-full min-h-0"
               />
-              <DesktopInspectorPanel />
-            </>
-          ) : null}
+            </div>
+          ) : (
+            <div
+              ref={desktopSplitRef}
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+            >
+              <div
+                ref={desktopWaveformColumnRef}
+                className={cn(
+                  "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                  "border-0 px-3 py-2 sm:px-4 sm:py-2.5",
+                )}
+              >
+                <div
+                  ref={containerRef}
+                  data-testid="primary-waveform"
+                  className="relative z-0 min-h-0 flex-1 w-full"
+                />
+              </div>
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize waveform and bottom panel"
+                tabIndex={0}
+                className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/40 bg-[#0a0806] outline-none hover:bg-stone-900/90 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                onPointerDown={onDesktopBottomResizePointerDown}
+                onPointerMove={onDesktopBottomResizePointerMove}
+                onPointerUp={onDesktopBottomResizePointerUp}
+                onPointerCancel={onDesktopBottomResizePointerUp}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                  e.preventDefault();
+                  const root = desktopSplitRef.current;
+                  if (!root) return;
+                  const h = root.clientHeight;
+                  const maxBottom = Math.min(
+                    Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
+                    h - DESKTOP_WAVEFORM_MIN,
+                  );
+                  /** Arrow up → taller bottom stack (matches drag-up). */
+                  const delta = e.key === "ArrowUp" ? 8 : -8;
+                  setDesktopBottomStackPx((prev) => {
+                    const next = Math.min(
+                      Math.max(prev + delta, DESKTOP_BOTTOM_STACK_MIN),
+                      Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
+                    );
+                    try {
+                      sessionStorage.setItem(
+                        DESKTOP_BOTTOM_STACK_PX_KEY,
+                        String(Math.round(next)),
+                      );
+                    } catch {
+                      /* private mode */
+                    }
+                    return next;
+                  });
+                }}
+              >
+                <span className="pointer-events-none h-1 w-10 rounded-full bg-stone-600/90 group-hover:bg-stone-500" />
+              </div>
+              <div
+                className="flex w-full shrink-0 flex-col overflow-hidden border-t border-stone-800/50 bg-[#050403]"
+                style={{ maxHeight: desktopBottomStackPx }}
+              >
+                <DesktopTransportBar
+                  duration={duration}
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
+                  loopPlaybackEnabled={loopPlaybackEnabled}
+                  canEnableLoopPlayback={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  loopPracticeScope={loopPracticeScope}
+                  hasActivePhrase={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  phraseHasFocusRegions={phraseHasFocusRegions}
+                  regionContextActive={regionContextActive}
+                  activeLoopId={activeLoopId}
+                  editableLoopId={editableLoopId}
+                  onToggleEditContext={handleTransportEditContext}
+                  onDeleteContext={handleTransportDeleteContext}
+                  tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+                  onTogglePlay={handleTransportTogglePlay}
+                  onRestartLoop={() => {
+                    const ws = wavesurferRef.current;
+                    if (!ws || !activeLoopId) return;
+                    const st = useWoodshedStore.getState();
+                    const loop = loops.find((l) => l.id === activeLoopId);
+                    if (!loop) return;
+                    ws.setTime(
+                      getRestartSeekSeconds({
+                        loop,
+                        loopPracticeScope: st.loopPracticeScope,
+                        activeSegmentId: st.activeSegmentId,
+                        lastPracticeSegmentIdByPhrase:
+                          st.lastPracticeSegmentIdByPhrase,
+                      }),
+                    );
+                    void ws.play();
+                  }}
+                  onCycleLoopPlaybackMode={() =>
+                    useWoodshedStore.getState().cycleLoopPlaybackMode()
+                  }
+                  onTempoSlider={handleTransportTempo}
+                  formatTime={(t) => formatTime(t)}
+                />
+                <DesktopInspectorPanel />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </section>
