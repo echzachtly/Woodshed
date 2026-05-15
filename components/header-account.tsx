@@ -1,11 +1,12 @@
 "use client";
 
-import { User } from "lucide-react";
+import { BookOpen, User } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
+import { WoodshedHowItWorksDialog } from "@/components/woodshed-how-it-works-dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
   const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -44,13 +46,28 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
   if (!configured) {
     if (!compactMobile) return null;
     return (
-      <Button
-        asChild
-        variant="outline"
-        className="h-9 shrink-0 rounded-full border-stone-600/50 bg-stone-900/60 px-3 text-xs font-medium text-stone-200 hover:bg-stone-800 hover:text-stone-50"
-      >
-        <Link href="/login">Sign in</Link>
-      </Button>
+      <>
+        <WoodshedHowItWorksDialog open={guideOpen} onOpenChange={setGuideOpen} />
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0 rounded-full border border-stone-700/40 bg-stone-900/50 text-stone-400 hover:bg-stone-800/80 hover:text-stone-100"
+            aria-label="How Woodshed Works"
+            onClick={() => setGuideOpen(true)}
+          >
+            <BookOpen className="h-4 w-4" strokeWidth={2} aria-hidden />
+          </Button>
+          <Button
+            asChild
+            variant="outline"
+            className="h-9 shrink-0 rounded-full border-stone-600/50 bg-stone-900/60 px-3 text-xs font-medium text-stone-200 hover:bg-stone-800 hover:text-stone-50"
+          >
+            <Link href="/login">Sign in</Link>
+          </Button>
+        </div>
+      </>
     );
   }
 
@@ -70,6 +87,7 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
     if (compactMobile) {
       return (
         <div ref={wrapRef} className="relative shrink-0">
+          <WoodshedHowItWorksDialog open={guideOpen} onOpenChange={setGuideOpen} />
           <Button
             type="button"
             variant="secondary"
@@ -91,6 +109,19 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
                 {user.email}
               </p>
               <div className="border-t border-stone-800/60 px-2 py-1.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 w-full justify-start px-3 text-sm text-stone-300 hover:bg-stone-800/70 hover:text-stone-50"
+                  role="menuitem"
+                  onClick={() => {
+                    setGuideOpen(true);
+                    closeMenu();
+                  }}
+                >
+                  <BookOpen className="mr-2 h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+                  How Woodshed Works
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"
@@ -153,13 +184,28 @@ export function HeaderAccount({ compactMobile = false }: HeaderAccountProps) {
 
   if (compactMobile) {
     return (
-      <Button
-        asChild
-        variant="outline"
-        className="h-9 shrink-0 rounded-full border-violet-500/30 bg-stone-900/70 px-3 text-xs font-medium text-violet-100 hover:border-violet-400/45 hover:bg-stone-800 hover:text-white"
-      >
-        <Link href="/login">Sign in</Link>
-      </Button>
+      <>
+        <WoodshedHowItWorksDialog open={guideOpen} onOpenChange={setGuideOpen} />
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0 rounded-full border border-stone-700/40 bg-stone-900/50 text-stone-400 hover:bg-stone-800/80 hover:text-stone-100"
+            aria-label="How Woodshed Works"
+            onClick={() => setGuideOpen(true)}
+          >
+            <BookOpen className="h-4 w-4" strokeWidth={2} aria-hidden />
+          </Button>
+          <Button
+            asChild
+            variant="outline"
+            className="h-9 shrink-0 rounded-full border-violet-500/30 bg-stone-900/70 px-3 text-xs font-medium text-violet-100 hover:border-violet-400/45 hover:bg-stone-800 hover:text-white"
+          >
+            <Link href="/login">Sign in</Link>
+          </Button>
+        </div>
+      </>
     );
   }
 

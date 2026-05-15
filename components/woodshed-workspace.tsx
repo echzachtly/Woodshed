@@ -84,6 +84,8 @@ import {
   setActivePhraseRegionVirtualAppendPin,
 } from "@/lib/wavesurfer-regions-virtual-append-phrase-pin";
 import { peekWaveSurferDom, setWaveNormalizedScroll } from "@/lib/waveform-scroll";
+import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
+import { installShiftWaveformAuthoringGesture } from "@/lib/shift-waveform-authoring-gesture";
 import {
   PLAYHEAD_UI_TIME_MS,
   readPlaybackSeconds,
@@ -214,6 +216,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const cancelPlaybackLoopRef = useRef<(() => void) | null>(null);
   /** Releases the click-drag pan gesture listeners from the effect cleanup. */
   const releasePanRef = useRef<(() => void) | null>(null);
+  /** Desktop Shift+drag phrase / focus authoring. */
+  const releaseShiftAuthoringRef = useRef<(() => void) | null>(null);
   /** WaveSurfer mount effect reads this ref — keep in sync with `isMobilePractice`. */
   const mobilePracticeModeRef = useRef(false);
 
@@ -730,6 +734,41 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           panDom.scrollContainer,
           () => mobilePracticeModeRef.current,
         );
+        releaseShiftAuthoringRef.current?.();
+        releaseShiftAuthoringRef.current = installShiftWaveformAuthoringGesture({
+          scrollContainer: panDom.scrollContainer,
+          getWave: () => wavesurferRef.current,
+          isMobilePractice: () => mobilePracticeModeRef.current,
+          getMinPxPerSec: () => useWoodshedStore.getState().minPxPerSec,
+          commit: ({ startSec, endSec }) => {
+            const st = useWoodshedStore.getState();
+            const phraseId = st.activeLoopId;
+            const loop = phraseId
+              ? st.loops.find((l) => l.id === phraseId)
+              : undefined;
+            if (
+              phraseId &&
+              shiftDragShouldCreateFocusInsideActivePhrase(
+                loop,
+                startSec,
+                endSec,
+              )
+            ) {
+              const r = st.createFocusSegmentFromShiftDrag({
+                phraseId,
+                startSec,
+                endSec,
+              });
+              if (!r) return null;
+              st.setCurrentTime(r.seekTo);
+              return r;
+            }
+            const phrase = st.createPhraseFromShiftDrag(startSec, endSec);
+            if (!phrase) return null;
+            st.setCurrentTime(phrase.start);
+            return { seekTo: phrase.start };
+          },
+        });
         pinchZoomReleaseRef.current = installWaveformPinchZoom(ws, {
           isMobilePractice: () => mobilePracticeModeRef.current,
           getStore: () => useWoodshedStore.getState(),
@@ -938,6 +977,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       /** Release the pan handler before destroying WaveSurfer (DOM listeners attach to the scrollContainer). */
       releasePanRef.current?.();
       releasePanRef.current = null;
+      releaseShiftAuthoringRef.current?.();
+      releaseShiftAuthoringRef.current = null;
       pinchZoomReleaseRef.current?.();
       pinchZoomReleaseRef.current = null;
       wavesurferRef.current?.destroy();
@@ -1150,8 +1191,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               : segmentMobileReadonly
                 ? "rgba(100, 116, 139, 0.055)"
                 : selected
-                  ? "rgba(148, 163, 184, 0.11)"
-                  : "rgba(100, 116, 139, 0.045)",
+                  ? "rgba(167, 180, 198, 0.14)"
+                  : "rgba(100, 116, 139, 0.048)",
           /** Move whole region off — only phrase-level editing uses full drag. */
           drag: false,
           resize: allowSegResize,
@@ -1178,6 +1219,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             el.style.pointerEvents = "none";
           } else {
             el.style.pointerEvents = "auto";
+            if (selected) {
+              el.classList.add("woodshed-region-segment-selected");
+            }
             if (allowSegResize) {
               el.classList.add("woodshed-region-segment-editable");
             }
@@ -1814,17 +1858,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     st.removeLoop(activeLoopId);
   }, [activeLoopId]);
 
-  const handleTransportAddContext = useCallback(() => {
-    const st = useWoodshedStore.getState();
-    const pid = st.activeLoopId;
-    const loop = pid ? st.loops.find((l) => l.id === pid) : undefined;
-    if (!pid || !loop || loop.end <= loop.start || !st.duration) {
-      st.addLoopCandidate();
-      return;
-    }
-    st.addSegment(pid);
-  }, []);
-
   const handleTransportTempo = useCallback((pct: number) => {
     useWoodshedStore.getState().setActiveLoopTempoFromPercent(pct);
     const ws = wavesurferRef.current;
@@ -2060,7 +2093,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                 editableLoopId={editableLoopId}
                 onToggleEditContext={handleTransportEditContext}
                 onDeleteContext={handleTransportDeleteContext}
-                onAddContext={handleTransportAddContext}
                 tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
                 onTogglePlay={handleTransportTogglePlay}
                 onRestartLoop={() => {
@@ -2154,6 +2186,8 @@ function installWaveformPanGesture(
   const onPointerDown = (event: PointerEvent) => {
     if (isMobilePractice?.()) return;
     if (event.button !== 0) return;
+    /** Shift+drag authoring owns the gesture — do not arm waveform pan. */
+    if (event.shiftKey) return;
     const target = event.target as Element | null;
     /** Editable region drag/resize is owned by the WaveSurfer regions plugin. */
     if (target?.closest(".woodshed-region-editing")) return;

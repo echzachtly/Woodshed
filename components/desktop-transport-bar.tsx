@@ -1,11 +1,10 @@
 "use client";
 
 import {
-  Check,
+  Lock,
+  LockOpen,
   Pause,
-  Pencil,
   Play,
-  Plus,
   Repeat,
   RotateCcw,
   Trash2,
@@ -32,13 +31,12 @@ export type DesktopTransportBarProps = {
   hasActivePhrase: boolean;
   /** Active phrase has ≥1 focus region (enables Focus Loop in the cycle). */
   phraseHasFocusRegions: boolean;
-  /** True when a practice region is selected (edit/delete/+ context). */
+  /** True when a practice region is selected (edit/delete context). */
   regionContextActive: boolean;
   activeLoopId: string | null;
   editableLoopId: string | null;
   onToggleEditContext: () => void;
   onDeleteContext: () => void;
-  onAddContext: () => void;
   tempoPercent: number;
   onTogglePlay: () => void;
   onRestartLoop: () => void;
@@ -66,7 +64,6 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
     editableLoopId,
     onToggleEditContext,
     onDeleteContext,
-    onAddContext,
     tempoPercent,
     onTogglePlay,
     onRestartLoop,
@@ -101,10 +98,10 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
   const loopAriaLabel = `Practice loop. ${getLoopModeDescription(loopCurrent)}. Next: ${getLoopModeDescription(loopNext)}.`;
 
   const editTitle = editingPhrase
-    ? "Done editing phrase bounds"
+    ? "Lock phrase waveform boundaries"
     : regionContextActive
-      ? "Edit focus region (inspector)"
-      : "Edit phrase bounds";
+      ? "Unlock focus region boundaries (inspector)"
+      : "Unlock phrase waveform boundaries";
 
   const editAria = editTitle;
 
@@ -113,14 +110,6 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
     : "Delete phrase";
 
   const deleteAria = deleteTitle;
-
-  const addTitle = hasActivePhrase
-    ? "Add focus region inside this phrase"
-    : "New phrase";
-
-  const addAria = addTitle;
-
-  const canAdd = Boolean(duration);
 
   return (
     <div
@@ -213,7 +202,7 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
             type="button"
             className={cn(
               "h-8 w-8 p-0 text-stone-500 hover:text-stone-200",
-              editingPhrase && "text-violet-200",
+              editingPhrase && "text-amber-100/95 hover:text-amber-50",
             )}
             disabled={!hasActivePhrase}
             aria-label={editAria}
@@ -221,9 +210,9 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
             onClick={onToggleEditContext}
           >
             {editingPhrase ? (
-              <Check className="h-3.5 w-3.5" />
+              <Lock className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
             ) : (
-              <Pencil className="h-3.5 w-3.5" />
+              <LockOpen className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
             )}
           </Button>
           <Button
@@ -236,17 +225,6 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
             onClick={onDeleteContext}
           >
             <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            type="button"
-            className="h-8 w-8 p-0 text-stone-500 hover:text-stone-200"
-            disabled={!canAdd}
-            aria-label={addAria}
-            title={addTitle}
-            onClick={onAddContext}
-          >
-            <Plus className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>

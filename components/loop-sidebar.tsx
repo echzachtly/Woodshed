@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { Check, Pencil, Plus, Trash2 } from "lucide-react";
+import { Lock, LockOpen, Plus, Trash2 } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -142,19 +142,19 @@ type PhraseRowProps = {
  * Visual states:
  *   inactive → low-contrast text, no chrome, hover reveals actions
  *   active   → soft violet wash + left accent + leading dot indicator
- *   editing  → adds a violet ring; the pencil swaps to a Check (Done)
+ *   editing  → adds a violet ring; LockOpen swaps to Lock (protect boundaries)
  *
  * Interactions:
  *   - click row        → select phrase
  *   - dblclick name    → enter inline rename (name only, no bounds unlock)
- *   - pencil           → toggle full edit mode (unlocks waveform bounds)
+ *   - lock control     → toggle waveform boundary lock (same as transport)
  *   - trash            → delete phrase
  *   - Enter / blur     → commit rename
  *   - Escape           → cancel rename (no save)
  *
- * Hover-only actions: the pencil and trash icons start at opacity-0 and fade
- * in on row hover or focus-within. The editing state keeps the Done icon
- * visible at all times so the user can always exit edit mode.
+ * Hover-only actions: the lock and trash icons start at opacity-0 and fade
+ * in on row hover or focus-within. The editing state keeps the Lock icon
+ * visible at all times so the user can always protect boundaries again.
  */
 function PhraseRow({
   loop,
@@ -340,24 +340,24 @@ function PhraseRow({
         <RowIconButton
           aria-label={
             editing
-              ? `Finish editing ${loop.name}`
-              : `Edit ${loop.name} — unlock boundaries`
+              ? `Lock waveform boundaries for ${loop.name}`
+              : `Unlock waveform boundaries for ${loop.name}`
           }
           title={
             editing
-              ? "Done — lock this phrase"
-              : "Edit — unlock waveform boundaries"
+              ? "Lock phrase boundaries — handles hidden"
+              : "Unlock phrase boundaries — drag handles on waveform"
           }
-          tone={editing ? "violet" : "muted"}
+          tone={editing ? "amber" : "muted"}
           onClick={(e) => {
             e.stopPropagation();
             onSetEditable(editing ? null : loop.id);
           }}
         >
           {editing ? (
-            <Check className="h-3.5 w-3.5" />
+            <Lock className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
           ) : (
-            <Pencil className="h-3.5 w-3.5" />
+            <LockOpen className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
           )}
         </RowIconButton>
         <RowIconButton
@@ -385,11 +385,11 @@ type RowIconButtonProps = {
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   "aria-label": string;
   title?: string;
-  tone: "muted" | "violet";
+  tone: "muted" | "amber";
 };
 
 /**
- * Tiny ghost icon button used for the per-row Edit / Delete actions.
+ * Tiny ghost icon button used for the per-row boundary lock / Delete actions.
  * Lives only on the active or hovered row, so its resting state must be
  * subtle — no border, no background — and the hover state must be calm
  * (low-saturation violet, never a harsh ring).
@@ -411,8 +411,8 @@ function RowIconButton({
         "inline-flex h-6 w-6 items-center justify-center rounded-md",
         "transition-colors duration-150",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-400/80",
-        tone === "violet"
-          ? "text-violet-100 hover:bg-violet-400/15"
+        tone === "amber"
+          ? "text-amber-100/95 hover:bg-amber-500/14"
           : "text-stone-500 hover:bg-stone-800/60 hover:text-stone-200",
       )}
     >

@@ -6,6 +6,7 @@ import {
   createInitialLoop,
   createSegmentInPhrase,
   loopFromBounds,
+  phraseSegmentFromBounds,
   type PhraseSegment,
   type PracticeLoop,
 } from "@/lib/loop-engine";
@@ -118,6 +119,23 @@ type WoodshedActions = {
     halfWidthSec?: number,
     baseName?: string,
   ) => PracticeLoop | null;
+  /**
+   * Desktop Shift+drag: add a phrase from [startSec,endSec] song times (clamped
+   * in loopFromBounds). Enables loop phrase, unlocks waveform handles.
+   */
+  createPhraseFromShiftDrag: (
+    startSec: number,
+    endSec: number,
+  ) => PracticeLoop | null;
+  /**
+   * Desktop Shift+drag: add a focus segment inside an existing phrase.
+   * Enables Focus Loop, unlocks segment handles, clears phrase waveform unlock.
+   */
+  createFocusSegmentFromShiftDrag: (args: {
+    phraseId: string;
+    startSec: number;
+    endSec: number;
+  }) => { seekTo: number } | null;
   selectLoop: (id: string | null) => void;
   renameLoop: (id: string, name: string) => void;
   updateLoopBounds: (id: string, start: number, end: number) => void;
@@ -363,6 +381,84 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       loopFocusTick: s.loopFocusTick + 1,
     }));
     return phrase;
+  },
+  createPhraseFromShiftDrag: (startSec, endSec) => {
+    const { duration } = get();
+    if (!duration) return null;
+    const phrase = loopFromBounds(
+      startSec,
+      endSec,
+      duration,
+      "New Phrase",
+    );
+    set((s) => ({
+      loops: [...s.loops, phrase],
+      activeLoopId: phrase.id,
+      editableLoopId: phrase.id,
+      phraseWaveformEditUnlockedById: { [phrase.id]: true },
+      loopPlaybackEnabled: true,
+      loopPracticeScope: "phrase" as const,
+      activeSegmentId: null,
+      loopFocusTick: s.loopFocusTick + 1,
+    }));
+    return phrase;
+  },
+  createFocusSegmentFromShiftDrag: ({ phraseId, startSec, endSec }) => {
+    const { duration, loops } = get();
+    if (!duration) return null;
+    const loop = loops.find((l) => l.id === phraseId);
+    if (!loop || loop.end <= loop.start) return null;
+    let lo = Math.min(startSec, endSec);
+    let hi = Math.max(startSec, endSec);
+    lo = Math.max(loop.start, Math.min(lo, loop.end));
+    hi = Math.min(loop.end, Math.max(hi, loop.start));
+    const phraseSpan = loop.end - loop.start;
+    const minSpan = Math.min(
+      0.05,
+      Math.max(duration * 0.001, phraseSpan * 0.001),
+    );
+    if (hi - lo < minSpan) {
+      hi = Math.min(loop.end, lo + minSpan);
+    }
+    const raw = phraseSegmentFromBounds(
+      phraseId,
+      lo,
+      hi,
+      "New Focus Loop",
+    );
+    const existing = loop.segments ?? [];
+    const merged = clampSegmentsToPhraseBounds(
+      [...existing, raw],
+      loop.start,
+      loop.end,
+    );
+    const created = merged.find((seg) => seg.id === raw.id);
+    if (!created) return null;
+    set((s) => {
+      const nextPhraseUnlock = { ...s.phraseWaveformEditUnlockedById };
+      delete nextPhraseUnlock[phraseId];
+      return {
+        loops: s.loops.map((l) =>
+          l.id === phraseId ? { ...l, segments: merged } : l,
+        ),
+        activeLoopId: phraseId,
+        activeSegmentId: created.id,
+        editableLoopId: null,
+        phraseWaveformEditUnlockedById: nextPhraseUnlock,
+        loopPlaybackEnabled: true,
+        loopPracticeScope: "practice_region" as const,
+        loopFocusTick: s.loopFocusTick + 1,
+        lastPracticeSegmentIdByPhrase: {
+          ...s.lastPracticeSegmentIdByPhrase,
+          [phraseId]: created.id,
+        },
+        focusRegionWaveformEditUnlockedById: {
+          ...s.focusRegionWaveformEditUnlockedById,
+          [created.id]: true,
+        },
+      };
+    });
+    return { seekTo: created.startTime };
   },
   selectLoop: (activeLoopId) =>
     set((s) => {

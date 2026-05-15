@@ -304,7 +304,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               ) : (
                 <>
                   <LockOpen className="h-3 w-3 opacity-90" aria-hidden />
-                  Edit
+                  Unlock
                 </>
               )}
             </button>
@@ -468,7 +468,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
             ) : (
               <>
                 <LockOpen className="h-3 w-3 opacity-90" aria-hidden />
-                Edit
+                Unlock
               </>
             )}
           </button>

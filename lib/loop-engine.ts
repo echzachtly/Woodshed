@@ -119,6 +119,28 @@ export function clampSegmentsToPhraseBounds(
   });
 }
 
+/** Create a focus segment with explicit song times (caller clamps to phrase bounds). */
+export function phraseSegmentFromBounds(
+  phraseId: string,
+  startTime: number,
+  endTime: number,
+  name: string,
+): PhraseSegment {
+  const t = nowMs();
+  const s0 = Math.min(startTime, endTime);
+  const s1 = Math.max(startTime, endTime);
+  return {
+    id: nanoid(),
+    phraseId,
+    name,
+    startTime: s0,
+    endTime: s1,
+    notes: "",
+    createdAt: t,
+    updatedAt: t,
+  };
+}
+
 export function createSegmentInPhrase(
   phraseId: string,
   phraseStart: number,
