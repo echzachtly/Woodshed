@@ -175,7 +175,19 @@ async function loadRegionsFactory(): Promise<unknown> {
   return mod.default;
 }
 
-function makeSurface(ws: WaveSurfer): MediaPlaybackSurface {
+/**
+ * WaveSurfer-backed implementation of {@link MediaPlaybackSurface} (Phase 1 playback boundary).
+ *
+ * **Source-agnostic (same contract alternate backends will implement):** play/pause/seek,
+ * duration/currentTime for transport + loop RAF, `setPlaybackRate` / `getMediaElement` for tempo.
+ *
+ * **WaveSurfer-specific:** delegates to WaveSurfer’s `<audio>` element and `readPlaybackSeconds`
+ * so UI time matches the existing clock semantics.
+ *
+ * Call sites in this component should use `getPlaybackSurface()` for playback control and
+ * keep `wavesurferRef` for waveform-only APIs (regions, zoom, load, DOM).
+ */
+function createWaveSurferPlaybackSurface(ws: WaveSurfer): MediaPlaybackSurface {
   return {
     getDuration: () => ws.getDuration(),
     getCurrentTime: () => readPlaybackSeconds(ws),
@@ -266,6 +278,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const pinchZoomReleaseRef = useRef<(() => void) | null>(null);
 
   const wavesurferRef = useRef<WaveSurfer | null>(null);
+  /**
+   * Central playback facade for Phase 1 (YouTube prep): transport, seeks, loop-clock reads,
+   * and tempo application must go through `MediaPlaybackSurface`, not raw WaveSurfer.
+   * Waveform/regions/zoom/load remain on `wavesurferRef`.
+   */
+  const getPlaybackSurface = useCallback((): MediaPlaybackSurface | null => {
+    const ws = wavesurferRef.current;
+    return ws ? createWaveSurferPlaybackSurface(ws) : null;
+  }, []);
   const regionsRef = useRef<RegionsHandle | null>(null);
   const phraseHandleDiagCleanupRef = useRef<(() => void) | null>(null);
 
@@ -609,7 +630,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
      * `container.scrollWidth` immediately after `ws.zoom()` because layout
      * hasn't flushed yet; derive instead from duration × pxPerSec + both gutters.
      */
-    const duration = ws.getDuration();
+    const playback = createWaveSurferPlaybackSurface(ws);
+    const duration = playback.getDuration();
     const totalScrollWidth =
       duration * nextPxPerSec + 2 * WAVEFORM_HORIZONTAL_GUTTER_PX;
     const maxScroll = Math.max(0, totalScrollWidth - clientWidth);
@@ -626,7 +648,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (st.viewportMode === "phrase-focus") {
       st.setViewportMode("follow");
     }
-    const d = ws.getDuration();
+    const playback = createWaveSurferPlaybackSurface(ws);
+    const d = playback.getDuration();
     const dom = peekWaveSurferDom(ws);
     const clientWidth = dom?.scrollContainer?.clientWidth ?? 0;
     suppressViewportScrollUntilRef.current = performance.now() + 220;
@@ -765,16 +788,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
      */
     const st = get();
     const chosen = st.loops.find((l) => l.id === id);
-    const ws = wavesurferRef.current;
-    if (ws && chosen && chosen.end > chosen.start) {
-      ws.setTime(chosen.start);
+    const playback = getPlaybackSurface();
+    if (playback && chosen && chosen.end > chosen.start) {
+      playback.seek(chosen.start);
       st.setCurrentTime(chosen.start);
     }
-  }, []);
+  }, [getPlaybackSurface]);
 
   const handleMobileRestartPractice = useCallback(() => {
-    const ws = wavesurferRef.current;
-    if (!ws || !activeLoopId) return;
+    const playback = getPlaybackSurface();
+    if (!playback || !activeLoopId) return;
     const st = useWoodshedStore.getState();
     const loop = st.loops.find((l) => l.id === activeLoopId);
     if (!loop || loop.end <= loop.start) return;
@@ -784,27 +807,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       activeSegmentId: st.activeSegmentId,
       lastPracticeSegmentIdByPhrase: st.lastPracticeSegmentIdByPhrase,
     });
-    ws.setTime(t);
+    playback.seek(t);
     st.setCurrentTime(t);
-    void ws.play();
-  }, [activeLoopId]);
+    void playback.play();
+  }, [activeLoopId, getPlaybackSurface]);
 
   const handleMobileFocusSegmentSelect = useCallback(
     (segmentId: string) => {
       if (!activeLoopId) return;
-      const ws = wavesurferRef.current;
+      const playback = getPlaybackSurface();
       const get = useWoodshedStore.getState;
       get().selectSegment(activeLoopId, segmentId);
       get().setLoopPracticeScope("practice_region");
       get().setLoopPlaybackEnabled(true);
       const loop = get().loops.find((l) => l.id === activeLoopId);
       const seg = loop?.segments?.find((s) => s.id === segmentId);
-      if (ws && seg && seg.endTime > seg.startTime) {
-        ws.setTime(seg.startTime);
+      if (playback && seg && seg.endTime > seg.startTime) {
+        playback.seek(seg.startTime);
         get().setCurrentTime(seg.startTime);
       }
     },
-    [activeLoopId],
+    [activeLoopId, getPlaybackSurface],
   );
 
   const loadBuiltInDemoProject = useCallback(async (): Promise<boolean> => {
@@ -958,6 +981,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       applyWaveformGutterMargins();
 
       /**
+       * One adapter instance per WaveSurfer mount — reused by loop RAF + transport listeners
+       * so hot paths don't allocate fresh `{ seek, play, … }` closures every tick.
+       */
+      const wsPlaybackSurface = createWaveSurferPlaybackSurface(ws);
+
+      /**
        * Click-drag pan on the main waveform.
        *
        * Why this exists:
@@ -986,6 +1015,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           () => mobilePracticeModeRef.current,
         );
         releaseShiftAuthoringRef.current?.();
+        /** Shift+drag authoring seeks via WaveSurfer inside the gesture helper (`getWave`); Phase 1 playback boundary is workspace-owned elsewhere. */
         releaseShiftAuthoringRef.current = installShiftWaveformAuthoringGesture({
           scrollContainer: panDom.scrollContainer,
           getWave: () => wavesurferRef.current,
@@ -1035,18 +1065,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       cancelPlaybackLoopRef.current = cancelTightLoop;
 
       function loopBoundaryStep() {
-        if (destroyed || !ws.isPlaying()) {
+        if (destroyed || !wsPlaybackSurface.isPlaying()) {
           tightLoopRaf = 0;
           return;
         }
         const snapshot = useWoodshedStore.getState();
         const rail = buildPlaybackLoopRail(snapshot);
-        const t = readPlaybackSeconds(ws);
+        const t = wsPlaybackSurface.getCurrentTime();
         if (rail.enabled && rail.end > rail.start) {
           if (t >= rail.end) {
-            ws.setTime(rail.start);
+            wsPlaybackSurface.seek(rail.start);
           } else if (t + 1e-4 < rail.start) {
-            ws.setTime(rail.start);
+            wsPlaybackSurface.seek(rail.start);
           }
         }
         tightLoopRaf = requestAnimationFrame(loopBoundaryStep);
@@ -1086,7 +1116,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
       ws.on("dblclick", (relativeX) => {
         if (mobilePracticeModeRef.current) return;
-        const dur = ws.getDuration();
+        const dur = wsPlaybackSurface.getDuration();
         if (!dur) return;
         const midpoint = clamp(relativeX, 0, 1) * dur;
         useWoodshedStore
@@ -1105,10 +1135,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         const tSec =
           typeof t === "number" && Number.isFinite(t)
             ? t
-            : readPlaybackSeconds(ws);
+            : wsPlaybackSurface.getCurrentTime();
         const now = performance.now();
         if (
-          !ws.isPlaying() ||
+          !wsPlaybackSurface.isPlaying() ||
           now - lastTransportUiMs >= PLAYHEAD_UI_TIME_MS
         ) {
           lastTransportUiMs = now;
@@ -1292,8 +1322,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   useEffect(() => {
     const ws = wavesurferRef.current;
     if (!ws) return;
-    const surface = makeSurface(ws);
-    applyPlaybackTempo(surface, activeLoop?.tempo ?? 1);
+    const playback = createWaveSurferPlaybackSurface(ws);
+    applyPlaybackTempo(playback, activeLoop?.tempo ?? 1);
   }, [activeLoop?.tempo, activeLoop?.id]);
 
   useEffect(() => {
@@ -1399,7 +1429,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     }
     loopsSignature.current = signature;
 
-    const trackDur = ws.getDuration();
+    const trackDur = createWaveSurferPlaybackSurface(ws).getDuration();
 
     phraseHandleDiagCleanupRef.current?.();
     phraseHandleDiagCleanupRef.current = null;
@@ -1666,7 +1696,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           const st = useWoodshedStore.getState();
           if (!st.isPlaying) return;
           const w = wavesurferRef.current;
-          w?.pause();
+          const playback = w ? createWaveSurferPlaybackSurface(w) : null;
+          playback?.pause();
           st.setPlaying(false);
         });
       }
@@ -1741,7 +1772,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       scrollContainer.addEventListener("pointermove", (event) => {
         const inner = wavesurferRef.current;
         if (!inner) return;
-        const dur = inner.getDuration();
+        const dur = createWaveSurferPlaybackSurface(inner).getDuration();
         if (!dur) return;
         const scRect = scrollContainer.getBoundingClientRect();
         const xInWaveform =
@@ -2054,10 +2085,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       if (mobilePracticeModeRef.current) {
         if (event.key === " ") {
           event.preventDefault();
-          const ws = wavesurferRef.current;
-          if (!ws) return;
-          if (ws.isPlaying()) ws.pause();
-          else void ws.play();
+          const playback = getPlaybackSurface();
+          if (!playback) return;
+          if (playback.isPlaying()) playback.pause();
+          else void playback.play();
         }
         return;
       }
@@ -2066,7 +2097,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         return;
       }
 
-      const ws = wavesurferRef.current;
+      const playback = getPlaybackSurface();
       const modifier = event.shiftKey;
       const stepping = modifier ? 0.05 : 0.75;
       if (event.repeat) return;
@@ -2074,21 +2105,25 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       switch (event.key) {
         case " ": {
           event.preventDefault();
-          if (!ws) return;
-          if (ws.isPlaying()) ws.pause();
-          else void ws.play();
+          if (!playback) return;
+          if (playback.isPlaying()) playback.pause();
+          else void playback.play();
           break;
         }
         case "ArrowLeft": {
           event.preventDefault();
-          if (!ws || !duration) break;
-          ws.setTime(clamp(ws.getCurrentTime() - stepping, 0, duration));
+          if (!playback || !duration) break;
+          playback.seek(
+            clamp(playback.getCurrentTime() - stepping, 0, duration),
+          );
           break;
         }
         case "ArrowRight": {
           event.preventDefault();
-          if (!ws || !duration) break;
-          ws.setTime(clamp(ws.getCurrentTime() + stepping, 0, duration));
+          if (!playback || !duration) break;
+          playback.seek(
+            clamp(playback.getCurrentTime() + stepping, 0, duration),
+          );
           break;
         }
         case "=":
@@ -2152,7 +2187,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           break;
       }
     },
-    [duration],
+    [duration, getPlaybackSurface],
   );
 
   useEffect(() => {
@@ -2187,21 +2222,26 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const enterMobileEditMode = useCallback(() => {
     if (!isMobilePractice || playbackChromeIdle || isDemoProject) return;
     setMobileEditModeActive(true);
-    const ws = wavesurferRef.current;
-    if (ws?.isPlaying()) ws.pause();
+    const playback = getPlaybackSurface();
+    if (playback?.isPlaying()) playback.pause();
     useWoodshedStore.getState().setPlaying(false);
-  }, [isDemoProject, isMobilePractice, playbackChromeIdle]);
+  }, [
+    getPlaybackSurface,
+    isDemoProject,
+    isMobilePractice,
+    playbackChromeIdle,
+  ]);
 
   const exitMobileEditMode = useCallback(() => {
     setMobileEditModeActive(false);
   }, []);
 
   const handleTransportTogglePlay = useCallback(() => {
-    const ws = wavesurferRef.current;
-    if (!ws) return;
-    if (ws.isPlaying()) ws.pause();
-    else void ws.play();
-  }, []);
+    const playback = getPlaybackSurface();
+    if (!playback) return;
+    if (playback.isPlaying()) playback.pause();
+    else void playback.play();
+  }, [getPlaybackSurface]);
 
   const handleTransportEditContext = useCallback(() => {
     const st = useWoodshedStore.getState();
@@ -2237,14 +2277,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleTransportTempo = useCallback((pct: number) => {
     useWoodshedStore.getState().setActiveLoopTempoFromPercent(pct);
-    const ws = wavesurferRef.current;
-    if (!ws) return;
-    const surface = makeSurface(ws);
+    const playback = getPlaybackSurface();
+    if (!playback) return;
     applyPlaybackTempo(
-      surface,
+      playback,
       useWoodshedStore.getState().activeLoopTemps(),
     );
-  }, []);
+  }, [getPlaybackSurface]);
 
   const handleResetTempo100 = useCallback(() => {
     handleTransportTempo(100);
@@ -2493,7 +2532,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               onNavigate={(seconds) => {
                 const st = useWoodshedStore.getState();
                 st.exitPhraseFitAfterUserNavigation();
-                wavesurferRef.current?.setTime(seconds);
+                getPlaybackSurface()?.seek(seconds);
               }}
               onViewportPanToRatio={(ratio) => {
                 const st = useWoodshedStore.getState();
@@ -2602,12 +2641,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                   tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
                   onTogglePlay={handleTransportTogglePlay}
                   onRestartLoop={() => {
-                    const ws = wavesurferRef.current;
-                    if (!ws || !activeLoopId) return;
+                    const playback = getPlaybackSurface();
+                    if (!playback || !activeLoopId) return;
                     const st = useWoodshedStore.getState();
                     const loop = loops.find((l) => l.id === activeLoopId);
                     if (!loop) return;
-                    ws.setTime(
+                    playback.seek(
                       getRestartSeekSeconds({
                         loop,
                         loopPracticeScope: st.loopPracticeScope,
@@ -2616,7 +2655,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                           st.lastPracticeSegmentIdByPhrase,
                       }),
                     );
-                    void ws.play();
+                    void playback.play();
                   }}
                   onCycleLoopPlaybackMode={() =>
                     useWoodshedStore.getState().cycleLoopPlaybackMode()
