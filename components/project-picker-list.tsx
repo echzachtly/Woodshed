@@ -1,6 +1,6 @@
 "use client";
 
-import { Upload } from "lucide-react";
+import { Link as LinkIcon, Upload } from "lucide-react";
 import { memo } from "react";
 
 import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
@@ -18,6 +18,9 @@ export type ProjectPickerListProps = {
   onPickProject: (id: string) => void;
   /** When set, renders the “Open audio file…” row (mobile sheet + desktop menu). */
   onOpenAudioFile?: () => void;
+  /** Feature-flagged YouTube import from parent. */
+  showYoutubeImport?: boolean;
+  onPasteYoutubeLink?: () => void;
   /** Optional class on the root `<ul>`. */
   listClassName?: string;
 };
@@ -38,6 +41,8 @@ export const ProjectPickerList = memo(function ProjectPickerList(
     showCloudSessions,
     onPickProject,
     onOpenAudioFile,
+    showYoutubeImport = false,
+    onPasteYoutubeLink,
     listClassName,
   } = props;
 
@@ -112,6 +117,29 @@ export const ProjectPickerList = memo(function ProjectPickerList(
               </span>
             </button>
           </li>
+          {showYoutubeImport && onPasteYoutubeLink ? (
+            <li className="min-w-0">
+              <button
+                type="button"
+                onClick={onPasteYoutubeLink}
+                className={cn(
+                  "flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors touch-manipulation",
+                  "text-stone-400 hover:bg-stone-800/50 hover:text-stone-200 active:bg-stone-800/70",
+                )}
+                aria-label="Paste a YouTube link for a new session"
+              >
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-stone-700/40 bg-stone-800/40 text-stone-500"
+                  aria-hidden
+                >
+                  <LinkIcon className="h-3 w-3" strokeWidth={2} />
+                </span>
+                <span className="min-w-0 flex-1 font-medium leading-snug">
+                  Paste YouTube link…
+                </span>
+              </button>
+            </li>
+          ) : null}
         </>
       ) : null}
 

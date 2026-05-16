@@ -70,7 +70,7 @@ describe("validateYoutubeDexieProjectMeta", () => {
     expect(validateYoutubeDexieProjectMeta(meta).ok).toBe(false);
   });
 
-  test("rejects mixed blobId + youtube discriminator", () => {
+  test("recovers mixed blobId + youtube discriminator by clearing blob FK", () => {
     const meta: StoredProjectMeta = {
       id: "mixed",
       name: "Mixed",
@@ -84,7 +84,12 @@ describe("validateYoutubeDexieProjectMeta", () => {
         canonicalUrl: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
       },
     };
-    expect(validateYoutubeDexieProjectMeta(meta).ok).toBe(false);
+    const v = validateYoutubeDexieProjectMeta(meta);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.meta.blobId).toBeUndefined();
+      expect(v.meta.mediaSource.videoId).toBe("jNQXAC9IVRw");
+    }
   });
 });
 

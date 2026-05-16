@@ -49,13 +49,18 @@ export function validateYoutubeDexieProjectMeta(
     };
   }
   if (meta.blobId) {
-    return {
-      ok: false,
-      reason:
-        "Mixed Dexie row: `blobId` present alongside YouTube media — refusing to load.",
+    /** Recover legacy/corrupt rows: YouTube sessions never use Dexie audio blobs. */
+    const recovered: ValidatedYoutubeDexieProjectMeta = {
+      ...meta,
+      blobId: undefined,
+      mediaSource: normalized,
     };
+    return { ok: true, meta: recovered };
   }
-  return { ok: true, meta: { ...meta, mediaSource: normalized } };
+  return {
+    ok: true,
+    meta: { ...meta, mediaSource: normalized } as ValidatedYoutubeDexieProjectMeta,
+  };
 }
 
 /** Timeline width hint until iframe duration reconciles — max(saved hint, furthest phrase/focus edge). */

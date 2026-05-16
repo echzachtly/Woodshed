@@ -88,6 +88,12 @@ export type MobilePracticeControlsProps = {
   mobileEditModeActive?: boolean;
   onEnterMobileEditMode?: () => void;
   onExitMobileEditMode?: () => void;
+  showYoutubeImport?: boolean;
+  onPasteYoutubeLink?: () => void;
+  /**
+   * Replaces default “only open native file picker” behavior after picking Open audio file… from mobile Projects sheet.
+   */
+  onOpenAudioFromProjectPicker?: () => void;
 };
 
 /**
@@ -139,6 +145,9 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
     mobileEditModeActive = false,
     onEnterMobileEditMode,
     onExitMobileEditMode,
+    showYoutubeImport = false,
+    onPasteYoutubeLink,
+    onOpenAudioFromProjectPicker,
   } = props;
 
   const [phraseSheetOpen, setPhraseSheetOpen] = useState(false);
@@ -195,8 +204,12 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
   }, [mobileEditModeActive]);
 
   const openAudioFromProjectSheet = useCallback(() => {
+    if (onOpenAudioFromProjectPicker) {
+      onOpenAudioFromProjectPicker();
+      return;
+    }
     fileInputRef.current?.click();
-  }, [fileInputRef]);
+  }, [fileInputRef, onOpenAudioFromProjectPicker]);
 
   const showFocusChips = focusSegments.length > 0;
   const pickerClass = "max-w-none w-full mx-0 min-h-[48px]";
@@ -559,6 +572,8 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
         showCloudSessions={showCloudSessions}
         onSelectProject={onRestoreProject}
         onOpenAudioFile={openAudioFromProjectSheet}
+        showYoutubeImport={showYoutubeImport}
+        onPasteYoutubeLink={onPasteYoutubeLink}
       />
 
       <MobilePhraseBottomSheet

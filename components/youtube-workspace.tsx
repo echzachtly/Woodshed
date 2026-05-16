@@ -69,6 +69,15 @@ import {
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
+export type YoutubeWorkspaceProps = {
+  /**
+   * `devPage` — `/dev/youtube-workspace` sandbox (resets store on mount, Dexie picker in header).
+   * `embedded` — main app shell (store owned by parent routing; compact chrome).
+   */
+  variant?: "devPage" | "embedded";
+  className?: string;
+};
+
 const DEFAULT_WATCH_URL = `https://www.youtube.com/watch?v=${YOUTUBE_PROTOTYPE_DEFAULT_VIDEO_ID}`;
 
 /** Same keys/limits as `woodshed-workspace.tsx` — shared `sessionStorage` height for the bottom stack. */
@@ -81,13 +90,23 @@ function canonicalWatchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
-export function YoutubeWorkspace() {
+export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
+  const variant = props?.variant ?? "devPage";
+  const rootClassName = props?.className;
+
   const sectionRef = useRef<HTMLElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YoutubeIframePlayerLike | null>(null);
   const bootstrapPollRef = useRef<number | null>(null);
 
-  const [videoInput, setVideoInput] = useState(DEFAULT_WATCH_URL);
+  const [videoInput, setVideoInput] = useState(() =>
+    variant === "embedded"
+      ? (() => {
+          const ms = useWoodshedStore.getState().mediaSource;
+          return ms.kind === "youtube" ? ms.canonicalUrl : "";
+        })()
+      : DEFAULT_WATCH_URL,
+  );
   const resolvedId = useMemo(() => extractYoutubeVideoId(videoInput), [videoInput]);
 
   const [loadStatus, setLoadStatus] = useState<
@@ -211,11 +230,24 @@ export function YoutubeWorkspace() {
     [phraseWaveformEditUnlockedById, focusRegionWaveformEditUnlockedById],
   );
 
-  /** Isolate global session — dev route shares the production store singleton. */
+  /** Dev sandbox resets global session; embedded mode is driven by main-app routing. */
   useEffect(() => {
+    if (variant === "embedded") return undefined;
     resetWorkspace();
     return () => resetWorkspace();
-  }, [resetWorkspace]);
+  }, [resetWorkspace, variant]);
+
+  const embeddedYoutubeSourceKey = useMemo(() => {
+    if (variant !== "embedded" || mediaSource.kind !== "youtube") return "";
+    return `${mediaSource.videoId}\u0000${mediaSource.canonicalUrl}`;
+  }, [variant, mediaSource]);
+
+  useEffect(() => {
+    if (variant !== "embedded") return;
+    const ms = useWoodshedStore.getState().mediaSource;
+    if (ms.kind !== "youtube") return;
+    setVideoInput(ms.canonicalUrl);
+  }, [variant, embeddedYoutubeSourceKey]);
 
   useEffect(() => {
     sectionRef.current?.focus({ preventScroll: true });
@@ -321,9 +353,9 @@ export function YoutubeWorkspace() {
   }, []);
 
   useEffect(() => {
-    if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) return;
+    if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED || variant !== "devPage") return;
     void refreshSavedYoutubeProjects();
-  }, [refreshSavedYoutubeProjects]);
+  }, [refreshSavedYoutubeProjects, variant]);
 
   /** Bootstrap / teardown YouTube player when the resolved id changes. */
   useEffect(() => {
@@ -404,11 +436,23 @@ export function YoutubeWorkspace() {
                 const st = useWoodshedStore.getState();
                 if (st.loops.length === 0) {
                   bootstrapFromDuration(dur);
-                  setProjectMeta(null, `YouTube (${resolvedId})`, {
+                  const pname =
+                    st.projectName.trim().length > 0
+                      ? st.projectName
+                      : `YouTube (${resolvedId})`;
+                  const canonical =
+                    st.mediaSource.kind === "youtube"
+                      ? st.mediaSource.canonicalUrl
+                      : canonicalWatchUrl(resolvedId);
+                  setProjectMeta(st.projectId, pname, {
                     kind: "youtube",
                     videoId: resolvedId,
-                    canonicalUrl: canonicalWatchUrl(resolvedId),
+                    canonicalUrl: canonical,
                     durationSeconds: dur,
+                    title:
+                      st.mediaSource.kind === "youtube"
+                        ? st.mediaSource.title
+                        : null,
                   });
                 } else {
                   setDuration(Math.max(st.duration || 0, dur));
@@ -938,11 +982,16 @@ export function YoutubeWorkspace() {
   return (
     <section
       ref={sectionRef}
-      className="flex h-[100dvh] min-h-0 flex-1 flex-col overflow-hidden bg-[#060504] text-stone-100 outline-none"
+      className={cn(
+        "flex min-h-0 flex-1 flex-col overflow-hidden bg-[#060504] text-stone-100 outline-none",
+        variant === "devPage" && "h-[100dvh]",
+        rootClassName,
+      )}
       tabIndex={-1}
       onKeyDown={handleKeyboard}
       aria-label="Woodshed YouTube workspace"
     >
+      {variant === "devPage" ? (
       <header className="border-b border-stone-800/80 px-4 py-3 sm:px-6">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-400">
           Dev · Phase 5–6 · YouTube workspace
@@ -1033,6 +1082,7 @@ export function YoutubeWorkspace() {
           <p className="mt-2 text-xs text-amber-400/90">{persistenceErr}</p>
         ) : null}
       </header>
+      ) : null}
 
       {errorMessage ? (
         <div className="mx-4 mt-3 rounded-md border border-red-900/55 bg-red-950/35 px-3 py-2 text-sm text-red-100 sm:mx-6">

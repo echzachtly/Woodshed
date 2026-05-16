@@ -22,10 +22,15 @@ import {
 } from "@/components/onboarding/desktop-waveform-onboarding";
 import { DemoProjectOrientationRibbon } from "@/components/onboarding/demo-project-orientation-ribbon";
 import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
+import { YoutubeWorkspace } from "@/components/youtube-workspace";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
 import {
   MobilePracticeControls,
 } from "@/components/mobile-practice-panel";
+import {
+  MobileProjectBottomSheet,
+} from "@/components/mobile-project-practice";
 import { MiniMap } from "@/components/mini-map";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { installWaveformPinchZoom } from "@/lib/waveform-mobile-pinch";
@@ -85,6 +90,13 @@ import {
   normalizeMediaSourceFromStoredProject,
   persistMediaSourceForDexieRow,
 } from "@/lib/woodshed-media-source";
+import { YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED } from "@/lib/youtube/constants";
+import {
+  captureYoutubeDexieProjectPayload,
+  hydrateYoutubeDexieIntoStore,
+  validateYoutubeDexieProjectMeta,
+} from "@/lib/youtube/youtube-dexie-project";
+import { parseYoutubePasteForMediaSource } from "@/lib/youtube/youtube-import";
 import { NEUTRAL_TIMELINE_PROTOTYPE_ENABLED } from "@/components/neutral-timeline/constants";
 import { NeutralTimelinePrototype } from "@/components/neutral-timeline/neutral-timeline-prototype";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
@@ -315,6 +327,21 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const [audioTimelineLoading, setAudioTimelineLoading] = useState(false);
   /** Increment so header / mobile sheets open the Projects picker for empty workspace CTA. */
   const [projectPickerOpenSignal, setProjectPickerOpenSignal] = useState(0);
+  const [importChoiceOpen, setImportChoiceOpen] = useState(false);
+  const [youtubeLinkDraft, setYoutubeLinkDraft] = useState("");
+  const [mobileYtProjectSheetOpen, setMobileYtProjectSheetOpen] =
+    useState(false);
+  const deferredUploadHydrationRef = useRef<
+    | {
+        meta: StoredProjectMeta;
+        options?: { audioBlob?: Blob };
+      }
+    | undefined
+  >(undefined);
+  const [waveSurferEpoch, setWaveSurferEpoch] = useState(0);
+  const hydrateProjectFnRef = useRef<
+    (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => Promise<void>
+  >(() => Promise.resolve());
 
   const {
     projectName,
@@ -333,6 +360,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     lastPracticeSegmentIdByPhrase,
     focusRegionWaveformEditUnlockedById,
     phraseWaveformEditUnlockedById,
+    mediaSourceKind,
   } = useWoodshedStore(
     useShallow((s) => ({
       projectName: s.projectName,
@@ -351,8 +379,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       lastPracticeSegmentIdByPhrase: s.lastPracticeSegmentIdByPhrase,
       focusRegionWaveformEditUnlockedById: s.focusRegionWaveformEditUnlockedById,
       phraseWaveformEditUnlockedById: s.phraseWaveformEditUnlockedById,
+      mediaSourceKind: s.mediaSource.kind,
     })),
   );
+  const youtubeShellActive =
+    YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED && mediaSourceKind === "youtube";
+
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === activeLoopId),
     [activeLoopId, loops],
@@ -871,6 +903,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, [primeWaveformCaches]);
 
   useEffect(() => {
+    if (youtubeShellActive) {
+      return () => {};
+    }
+
     let destroyed = false;
     const regionFactoryPromise = loadRegionsFactory();
     const initialHost = containerRef.current;
@@ -978,6 +1014,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
       regionsRef.current = regions;
       wavesurferRef.current = ws;
+      setWaveSurferEpoch((n) => n + 1);
 
       const applyWaveformGutterMargins = () => {
         const dom = peekWaveSurferDom(ws);
@@ -1273,7 +1310,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
       wavesurferRef.current = null;
     };
-  }, []);
+  }, [youtubeShellActive]);
+
+  useEffect(() => {
+    if (youtubeShellActive) return;
+    if (!wavesurferRef.current) return;
+    const pending = deferredUploadHydrationRef.current;
+    if (!pending) return;
+    deferredUploadHydrationRef.current = undefined;
+    void hydrateProjectFnRef.current(pending.meta, pending.options);
+  }, [youtubeShellActive, waveSurferEpoch]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;
@@ -1886,8 +1932,18 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const hydrateProject = useCallback(
     async (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => {
+      const normalized = normalizeMediaSourceFromStoredProject(meta);
+      if (normalized.kind === "youtube") {
+        devWarn(
+          "hydrateProject called with YouTube media — use main-app YouTube loader.",
+        );
+        return;
+      }
       const ws = wavesurferRef.current;
-      if (!ws) return;
+      if (!ws) {
+        deferredUploadHydrationRef.current = { meta, options };
+        return;
+      }
       setMobileEditModeActive(false);
       pendingDemoHydrationRef.current = null;
       const blob =
@@ -1915,6 +1971,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     },
     [primeWaveformCaches],
   );
+
+  hydrateProjectFnRef.current = hydrateProject;
 
   const scheduleSaveStatusClear = useCallback(
     (ms: number) => {
@@ -1951,7 +2009,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       );
       return;
     }
-    if (!audioBlobRef.current) {
+
+    const isYoutubeProject = snapshot.mediaSource.kind === "youtube";
+    const archivedAudioBlob = audioBlobRef.current;
+
+    if (!isYoutubeProject && !archivedAudioBlob) {
       devWarn("Load audio before saving");
       return;
     }
@@ -1985,7 +2047,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         configured &&
           supabase &&
           sessionUserId &&
-          !isDemo,
+          !isDemo &&
+          !isYoutubeProject,
       );
 
     devLog("[Woodshed save]", {
@@ -2029,7 +2092,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             name: snapshot.projectName,
             loops: snapshot.loops,
             activeLoopId: snapshot.activeLoopId,
-            audioBlob: audioBlobRef.current,
+            audioBlob: archivedAudioBlob!,
             practiceStateV1: capturePracticeStatePersistV1({
               loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
               loopPracticeScope: snapshot.loopPracticeScope,
@@ -2065,12 +2128,45 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     setSaveStatusMessage("Saving locally…");
     setSaveStatusTone("progress");
     try {
+      if (isYoutubeProject) {
+        if (snapshot.mediaSource.kind !== "youtube") {
+          throw new Error("Expected youtube mediaSource");
+        }
+        const payload = captureYoutubeDexieProjectPayload({
+          projectId: snapshot.projectId,
+          projectName: snapshot.projectName,
+          mediaSource: snapshot.mediaSource,
+          loops: snapshot.loops,
+          activeLoopId: snapshot.activeLoopId,
+          durationSeconds: snapshot.duration,
+          minPxPerSec: snapshot.minPxPerSec,
+          loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
+          loopPracticeScope: snapshot.loopPracticeScope,
+          activeSegmentId: snapshot.activeSegmentId,
+          lastPracticeSegmentIdByPhrase:
+            snapshot.lastPracticeSegmentIdByPhrase,
+        });
+        await saveDexieProject(payload);
+        const ms = payload.mediaSource;
+        if (!ms || ms.kind !== "youtube") {
+          throw new Error("YouTube save missing mediaSource");
+        }
+        useWoodshedStore
+          .getState()
+          .setProjectMeta(payload.id, payload.name, ms);
+        await listProjects().then(setProjectsList);
+        setSaveStatusMessage("Saved locally");
+        setSaveStatusTone("success");
+        scheduleSaveStatusClear(5000);
+        return;
+      }
+
       const pid = snapshot.projectId ?? nanoid();
       const persistedMedia = persistMediaSourceForDexieRow({
         source: snapshot.mediaSource,
         resolvedBlobId: pid,
       });
-      await saveBlobRecord(pid, audioBlobRef.current, "audio");
+      await saveBlobRecord(pid, archivedAudioBlob!, "audio");
       await saveDexieProject({
         id: pid,
         name: snapshot.projectName,
@@ -2227,10 +2323,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     }
   }, [duration]);
 
-  const userProjectsSelectable = useMemo(
-    () => projects.filter((p) => p.id !== DEMO_PROJECT_ID),
-    [projects],
-  );
+  const userProjectsSelectable = useMemo(() => {
+    const base = projects.filter((p) => p.id !== DEMO_PROJECT_ID);
+    if (YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) return base;
+    return base.filter(
+      (p) => normalizeMediaSourceFromStoredProject(p).kind !== "youtube",
+    );
+  }, [projects]);
 
   const sessionSelectValue = useMemo(() => {
     if (!projectId) return "";
@@ -2243,7 +2342,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, [projectId, userProjectsSelectable]);
 
   /** Decoded timeline not ready — transport/header use quieter idle chrome. */
-  const playbackChromeIdle = duration <= 0;
+  const playbackChromeIdle = duration <= 0 && !youtubeShellActive;
 
   const activePhraseName = useMemo(() => {
     if (playbackChromeIdle) return "—";
@@ -2371,6 +2470,29 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
       const project = await loadDexieProject(id);
       if (!project) return;
+      if (normalizeMediaSourceFromStoredProject(project).kind === "youtube") {
+        if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) {
+          setSaveStatusMessage(
+            "This session uses YouTube. Enable NEXT_PUBLIC_WOODSHED_YOUTUBE_WORKSPACE in your environment to open it.",
+          );
+          setSaveStatusTone("error");
+          scheduleSaveStatusClear(12_000);
+          return;
+        }
+        const v = validateYoutubeDexieProjectMeta(project);
+        if (!v.ok) {
+          setSaveStatusMessage(`Could not open YouTube project: ${v.reason}`);
+          setSaveStatusTone("error");
+          scheduleSaveStatusClear(12_000);
+          return;
+        }
+        setMobileEditModeActive(false);
+        pendingDemoHydrationRef.current = null;
+        pendingHydration.current = null;
+        hydrateYoutubeDexieIntoStore(v.meta);
+        await listProjects().then(setProjectsList);
+        return;
+      }
       await hydrateProject(project);
     },
     [
@@ -2387,7 +2509,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   );
   const savedProjectsBrowseBusy =
     !dexieProjectsListed || (showCloudSessions && !cloudPickerListed);
-  const showEmptyWorkspace = duration <= 0 && !audioTimelineLoading;
+  const showEmptyWorkspace =
+    duration <= 0 && !audioTimelineLoading && !youtubeShellActive;
 
   const showDemoOrientationRibbon =
     isDemoProject && duration > 0 && !demoOrientationSeen;
@@ -2414,9 +2537,81 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     setProjectPickerOpenSignal((n) => n + 1);
   }, []);
 
+  const handledYtMobilePickerSignalRef = useRef(0);
+  useEffect(() => {
+    if (!isMobilePractice || !youtubeShellActive) return;
+    if (projectPickerOpenSignal <= handledYtMobilePickerSignalRef.current) {
+      return;
+    }
+    handledYtMobilePickerSignalRef.current = projectPickerOpenSignal;
+    setMobileYtProjectSheetOpen(true);
+  }, [isMobilePractice, youtubeShellActive, projectPickerOpenSignal]);
+
   const openDemoFromEmptyWorkspace = useCallback(() => {
     void handleRestoreProject(DEMO_PROJECT_ID);
   }, [handleRestoreProject]);
+
+  const openImportChoiceModal = useCallback(() => {
+    setYoutubeLinkDraft("");
+    setImportChoiceOpen(true);
+  }, []);
+
+  const triggerAudioUploadImport = useCallback(() => {
+    setImportChoiceOpen(false);
+    setYoutubeLinkDraft("");
+    window.requestAnimationFrame(() => fileInputRef.current?.click());
+  }, []);
+
+  const confirmNewYoutubeFromPaste = useCallback(() => {
+    const ms = parseYoutubePasteForMediaSource(youtubeLinkDraft);
+    if (!ms) {
+      setSaveStatusMessage(
+        "Paste a valid YouTube link (watch URL, Shorts, or youtu.be).",
+      );
+      setSaveStatusTone("error");
+      scheduleSaveStatusClear(9000);
+      return;
+    }
+    setImportChoiceOpen(false);
+    setYoutubeLinkDraft("");
+    setMobileEditModeActive(false);
+    pendingDemoHydrationRef.current = null;
+    pendingHydration.current = null;
+    audioBlobRef.current = null;
+    loopsSignature.current = "";
+    useWoodshedStore.getState().resetWorkspace();
+    const pid = nanoid();
+    useWoodshedStore
+      .getState()
+      .setProjectMeta(pid, `YouTube (${ms.videoId})`, ms);
+    void listProjects().then(setProjectsList);
+  }, [youtubeLinkDraft, scheduleSaveStatusClear]);
+
+  const handleEmptyWorkspaceCreateProject = useCallback(() => {
+    if (YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) openImportChoiceModal();
+    else fileInputRef.current?.click();
+  }, [openImportChoiceModal]);
+
+  const mobileYtPickProjectThenCloseSheet = useCallback(
+    async (id: string) => {
+      await handleRestoreProject(id);
+      setMobileYtProjectSheetOpen(false);
+    },
+    [handleRestoreProject],
+  );
+
+  const mobileYtOpenAudioFromSheet = useCallback(() => {
+    setMobileYtProjectSheetOpen(false);
+    window.requestAnimationFrame(() => {
+      if (YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) openImportChoiceModal();
+      else fileInputRef.current?.click();
+    });
+  }, [openImportChoiceModal]);
+
+  const mobileYtPasteYoutubeFromSheet = useCallback(() => {
+    setMobileYtProjectSheetOpen(false);
+    window.requestAnimationFrame(() => openImportChoiceModal());
+  }, [openImportChoiceModal]);
 
   return (
     <section
@@ -2442,7 +2637,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           onRestoreProject={handleRestoreProject}
           projectPickerOpenSignal={projectPickerOpenSignal}
           timelineIdle={playbackChromeIdle}
-          onOpenAudioFile={() => fileInputRef.current?.click()}
+          onOpenAudioFile={
+            YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
+              ? openImportChoiceModal
+              : () => fileInputRef.current?.click()
+          }
+          showYoutubeImport={YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED}
+          onPasteYoutubeLink={
+            YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
+              ? openImportChoiceModal
+              : undefined
+          }
           activePhraseName={activePhraseName}
           loops={loops}
           activeLoopId={activeLoopId}
@@ -2488,246 +2693,369 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           )}
         >
           {isMobilePractice ? (
-            <>
-              <div
-                className={cn(
-                  "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
-                  "touch-manipulation border-b px-3 py-2 transition-[box-shadow,background-color] duration-150",
-                  mobileEditModeActive
-                    ? "border-violet-500/25 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.12)] bg-gradient-to-br from-[#0c0820] via-[#0b0806] to-[#10080a]"
-                    : "border-stone-800/80",
-                )}
-                data-mobile-practice="true"
-                data-mobile-edit-mode={mobileEditModeActive ? "true" : "false"}
-              >
-                <div
-                  ref={containerRef}
-                  data-testid="primary-waveform"
-                  className="relative z-0 h-full w-full min-h-0"
+            youtubeShellActive ? (
+              <>
+                <div className="flex min-[769px]:hidden shrink-0 items-center gap-2 border-b border-stone-800/55 bg-stone-950/95 px-3 py-2">
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-lg border border-stone-700/55 bg-stone-900/75 px-3 py-2 text-[13px] font-medium text-stone-100 touch-manipulation"
+                    onClick={() => setMobileYtProjectSheetOpen(true)}
+                  >
+                    Projects…
+                  </button>
+                  <span className="min-w-0 flex-1 truncate text-center text-[13px] font-medium text-stone-300">
+                    {projectName}
+                  </span>
+                </div>
+                <YoutubeWorkspace
+                  key={projectId ?? "youtube-session"}
+                  variant="embedded"
+                  className="min-h-0 min-w-0 flex-1"
                 />
-                {showEmptyWorkspace ? (
-                  <WorkspaceEmptyState
-                    onCreateNewProject={() => fileInputRef.current?.click()}
-                    onOpenDemoProject={openDemoFromEmptyWorkspace}
-                    onOpenSavedProject={requestOpenSavedProjectPicker}
-                    savedProjectsBrowseBusy={savedProjectsBrowseBusy}
-                  />
-                ) : null}
-              </div>
-              <MobilePracticeControls
-                fileInputRef={fileInputRef}
-                fileAccept={MOBILE_AUDIO_INPUT_ACCEPT}
-                onFileInputChange={handleMobileFileInputChange}
-                projectName={projectName}
-                isDemoProject={isDemoProject}
-                sessionSelectValue={sessionSelectValue}
-                demoProjectId={DEMO_PROJECT_ID}
-                demoProjectLabel={demoPickerTitle}
-                userProjects={userProjectsSelectable}
-                cloudProjects={cloudProjects}
-                showCloudSessions={showCloudSessions}
-                onRestoreProject={handleRestoreProject}
-                saveStatusMessage={saveStatusMessage}
-                saveStatusTone={saveStatusTone}
-                cloudListError={cloudListError}
-                activePhraseName={activePhraseName}
-                isPlaying={isPlaying}
-                duration={duration}
-                currentTime={currentTime}
-                tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-                loopPlaybackEnabled={loopPlaybackEnabled}
-                canEnableLoopPlayback={Boolean(
-                  activeLoop && activeLoop.end > activeLoop.start,
-                )}
-                loopPracticeScope={loopPracticeScope}
-                phraseHasFocusRegions={phraseHasFocusRegions}
-                onCycleLoopPlaybackMode={() =>
-                  useWoodshedStore.getState().cycleLoopPlaybackMode()
-                }
-                onTogglePlay={handleTransportTogglePlay}
-                onTempoSlider={handleTransportTempo}
-                onResetTempoTo100={handleResetTempo100}
-                loops={loops}
-                activeLoopId={activeLoopId}
-                onSelectPhrase={handleMobilePhraseSelect}
-                focusSegments={activeLoop?.segments ?? []}
-                onRestartPractice={handleMobileRestartPractice}
-                onSelectFocusSegment={handleMobileFocusSegmentSelect}
-                canRestartPractice={Boolean(
-                  activeLoop && activeLoop.end > activeLoop.start,
-                )}
-                focusChipSelectedSegmentId={mobileFocusChipSelectedId}
-                projectPickerOpenSignal={projectPickerOpenSignal}
-                timelineIdle={playbackChromeIdle}
-                mobileEditModeActive={mobileEditModeActive}
-                onEnterMobileEditMode={enterMobileEditMode}
-                onExitMobileEditMode={exitMobileEditMode}
-              />
-            </>
-          ) : null}
-          {!isMobilePractice && !showEmptyWorkspace ? (
-            <MiniMap
-              placement="top"
-              peaks={decodedPeaks}
-              duration={duration}
-              loops={loops}
-              activeLoopId={activeLoopId}
-              viewport={viewport}
-              currentTime={currentTime}
-              onNavigate={(seconds) => {
-                const st = useWoodshedStore.getState();
-                st.exitPhraseFitAfterUserNavigation();
-                getPlaybackSurface()?.seek(seconds);
-              }}
-              onViewportPanToRatio={(ratio) => {
-                const st = useWoodshedStore.getState();
-                st.exitPhraseFitAfterUserNavigation();
-                setWaveNormalizedScroll(wavesurferRef.current, ratio);
-              }}
-              onFitAll={handleResetZoomFullSong}
-            />
-          ) : null}
-          {NEUTRAL_TIMELINE_PROTOTYPE_ENABLED &&
-          !isMobilePractice &&
-          !showEmptyWorkspace ? (
-            <NeutralTimelinePrototype
-              duration={duration}
-              currentTime={currentTime}
-              loops={loops}
-              activeLoopId={activeLoopId}
-              activeSegmentId={activeSegmentId}
-              pxPerSec={minPxPerSec}
-              onPxPerSecChange={handleNeutralTimelinePxPerSec}
-              onSeek={handleNeutralTimelineSeek}
-            />
-          ) : null}
-          {!isMobilePractice ? (
-            <div
-              ref={desktopSplitRef}
-              className="flex min-h-0 min-w-0 flex-1 flex-col"
-            >
-              <div
-                ref={desktopWaveformColumnRef}
-                className={cn(
-                  "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
-                  "border-0 px-3 py-2 sm:px-4 sm:py-2.5",
-                )}
-              >
-                <div
-                  ref={containerRef}
-                  data-testid="primary-waveform"
-                  className="relative z-0 min-h-0 flex-1 w-full"
+                <MobileProjectBottomSheet
+                  isOpen={mobileYtProjectSheetOpen}
+                  onClose={() => setMobileYtProjectSheetOpen(false)}
+                  sessionSelectValue={sessionSelectValue}
+                  demoProjectId={DEMO_PROJECT_ID}
+                  demoProjectLabel={demoPickerTitle}
+                  userProjects={userProjectsSelectable}
+                  cloudProjects={cloudProjects}
+                  showCloudSessions={showCloudSessions}
+                  onSelectProject={mobileYtPickProjectThenCloseSheet}
+                  onOpenAudioFile={mobileYtOpenAudioFromSheet}
+                  showYoutubeImport={YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED}
+                  onPasteYoutubeLink={
+                    YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
+                      ? mobileYtPasteYoutubeFromSheet
+                      : undefined
+                  }
                 />
-                {showEmptyWorkspace ? (
-                  <WorkspaceEmptyState
-                    onCreateNewProject={() => fileInputRef.current?.click()}
-                    onOpenDemoProject={openDemoFromEmptyWorkspace}
-                    onOpenSavedProject={requestOpenSavedProjectPicker}
-                    savedProjectsBrowseBusy={savedProjectsBrowseBusy}
+              </>
+            ) : (
+              <>
+                <div
+                  className={cn(
+                    "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                    "touch-manipulation border-b px-3 py-2 transition-[box-shadow,background-color] duration-150",
+                    mobileEditModeActive
+                      ? "border-violet-500/25 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.12)] bg-gradient-to-br from-[#0c0820] via-[#0b0806] to-[#10080a]"
+                      : "border-stone-800/80",
+                  )}
+                  data-mobile-practice="true"
+                  data-mobile-edit-mode={mobileEditModeActive ? "true" : "false"}
+                >
+                  <div
+                    ref={containerRef}
+                    data-testid="primary-waveform"
+                    className="relative z-0 h-full w-full min-h-0"
                   />
-                ) : null}
-                {desktopShiftFocusGuidanceVisible ? (
-                  <DesktopShiftFocusGuidanceStripe />
-                ) : null}
-                {!showEmptyWorkspace && desktopPostFocusCreationHint ? (
-                  <DesktopPostFocusLoopHintStripe />
-                ) : null}
-              </div>
-              <div
-                role="separator"
-                aria-orientation="horizontal"
-                aria-label="Resize waveform and bottom panel"
-                tabIndex={0}
-                className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/40 bg-[#0a0806] outline-none hover:bg-stone-900/90 focus-visible:ring-2 focus-visible:ring-violet-500/40"
-                onPointerDown={onDesktopBottomResizePointerDown}
-                onPointerMove={onDesktopBottomResizePointerMove}
-                onPointerUp={onDesktopBottomResizePointerUp}
-                onPointerCancel={onDesktopBottomResizePointerUp}
-                onKeyDown={(e) => {
-                  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-                  e.preventDefault();
-                  const root = desktopSplitRef.current;
-                  if (!root) return;
-                  const h = root.clientHeight;
-                  const maxBottom = Math.min(
-                    Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
-                    h - DESKTOP_WAVEFORM_MIN,
-                  );
-                  /** Arrow up → taller bottom stack (matches drag-up). */
-                  const delta = e.key === "ArrowUp" ? 8 : -8;
-                  setDesktopBottomStackPx((prev) => {
-                    const next = Math.min(
-                      Math.max(prev + delta, DESKTOP_BOTTOM_STACK_MIN),
-                      Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
-                    );
-                    try {
-                      sessionStorage.setItem(
-                        DESKTOP_BOTTOM_STACK_PX_KEY,
-                        String(Math.round(next)),
-                      );
-                    } catch {
-                      /* private mode */
-                    }
-                    return next;
-                  });
-                }}
-              >
-                <span className="pointer-events-none h-1 w-10 rounded-full bg-stone-600/90 group-hover:bg-stone-500" />
-              </div>
-              <div
-                className="flex w-full shrink-0 flex-col overflow-hidden border-t border-stone-800/50 bg-[#050403]"
-                style={{ maxHeight: desktopBottomStackPx }}
-              >
-                <DesktopTransportBar
+                  {showEmptyWorkspace ? (
+                    <WorkspaceEmptyState
+                      onCreateNewProject={handleEmptyWorkspaceCreateProject}
+                      onOpenDemoProject={openDemoFromEmptyWorkspace}
+                      onOpenSavedProject={requestOpenSavedProjectPicker}
+                      savedProjectsBrowseBusy={savedProjectsBrowseBusy}
+                    />
+                  ) : null}
+                </div>
+                <MobilePracticeControls
+                  fileInputRef={fileInputRef}
+                  fileAccept={MOBILE_AUDIO_INPUT_ACCEPT}
+                  onFileInputChange={handleMobileFileInputChange}
+                  projectName={projectName}
+                  isDemoProject={isDemoProject}
+                  sessionSelectValue={sessionSelectValue}
+                  demoProjectId={DEMO_PROJECT_ID}
+                  demoProjectLabel={demoPickerTitle}
+                  userProjects={userProjectsSelectable}
+                  cloudProjects={cloudProjects}
+                  showCloudSessions={showCloudSessions}
+                  onRestoreProject={handleRestoreProject}
+                  saveStatusMessage={saveStatusMessage}
+                  saveStatusTone={saveStatusTone}
+                  cloudListError={cloudListError}
+                  activePhraseName={activePhraseName}
+                  isPlaying={isPlaying}
                   duration={duration}
                   currentTime={currentTime}
-                  isPlaying={isPlaying}
-                  timelineIdle={playbackChromeIdle}
+                  tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
                   loopPlaybackEnabled={loopPlaybackEnabled}
                   canEnableLoopPlayback={Boolean(
                     activeLoop && activeLoop.end > activeLoop.start,
                   )}
                   loopPracticeScope={loopPracticeScope}
-                  hasActivePhrase={Boolean(
-                    activeLoop && activeLoop.end > activeLoop.start,
-                  )}
                   phraseHasFocusRegions={phraseHasFocusRegions}
-                  regionContextActive={regionContextActive}
-                  activeLoopId={activeLoopId}
-                  editableLoopId={editableLoopId}
-                  onToggleEditContext={handleTransportEditContext}
-                  onDeleteContext={handleTransportDeleteContext}
-                  tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-                  onTogglePlay={handleTransportTogglePlay}
-                  onRestartLoop={() => {
-                    const playback = getPlaybackSurface();
-                    if (!playback || !activeLoopId) return;
-                    const st = useWoodshedStore.getState();
-                    const loop = loops.find((l) => l.id === activeLoopId);
-                    if (!loop) return;
-                    playback.seek(
-                      getRestartSeekSeconds({
-                        loop,
-                        loopPracticeScope: st.loopPracticeScope,
-                        activeSegmentId: st.activeSegmentId,
-                        lastPracticeSegmentIdByPhrase:
-                          st.lastPracticeSegmentIdByPhrase,
-                      }),
-                    );
-                    void playback.play();
-                  }}
                   onCycleLoopPlaybackMode={() =>
                     useWoodshedStore.getState().cycleLoopPlaybackMode()
                   }
+                  onTogglePlay={handleTransportTogglePlay}
                   onTempoSlider={handleTransportTempo}
-                  formatTime={(t) => formatTime(t)}
+                  onResetTempoTo100={handleResetTempo100}
+                  loops={loops}
+                  activeLoopId={activeLoopId}
+                  onSelectPhrase={handleMobilePhraseSelect}
+                  focusSegments={activeLoop?.segments ?? []}
+                  onRestartPractice={handleMobileRestartPractice}
+                  onSelectFocusSegment={handleMobileFocusSegmentSelect}
+                  canRestartPractice={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  focusChipSelectedSegmentId={mobileFocusChipSelectedId}
+                  projectPickerOpenSignal={projectPickerOpenSignal}
+                  timelineIdle={playbackChromeIdle}
+                  mobileEditModeActive={mobileEditModeActive}
+                  onEnterMobileEditMode={enterMobileEditMode}
+                  onExitMobileEditMode={exitMobileEditMode}
+                  showYoutubeImport={YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED}
+                  onPasteYoutubeLink={
+                    YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
+                      ? openImportChoiceModal
+                      : undefined
+                  }
+                  onOpenAudioFromProjectPicker={
+                    YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
+                      ? openImportChoiceModal
+                      : undefined
+                  }
                 />
-                <DesktopInspectorPanel />
+              </>
+            )
+          ) : null}
+          {!isMobilePractice && youtubeShellActive ? (
+            <YoutubeWorkspace
+              key={projectId ?? "youtube-session"}
+              variant="embedded"
+              className="min-h-0 min-w-0 flex-1"
+            />
+          ) : !isMobilePractice ? (
+            <>
+              {!showEmptyWorkspace ? (
+                <MiniMap
+                  placement="top"
+                  peaks={decodedPeaks}
+                  duration={duration}
+                  loops={loops}
+                  activeLoopId={activeLoopId}
+                  viewport={viewport}
+                  currentTime={currentTime}
+                  onNavigate={(seconds) => {
+                    const st = useWoodshedStore.getState();
+                    st.exitPhraseFitAfterUserNavigation();
+                    getPlaybackSurface()?.seek(seconds);
+                  }}
+                  onViewportPanToRatio={(ratio) => {
+                    const st = useWoodshedStore.getState();
+                    st.exitPhraseFitAfterUserNavigation();
+                    setWaveNormalizedScroll(wavesurferRef.current, ratio);
+                  }}
+                  onFitAll={handleResetZoomFullSong}
+                />
+              ) : null}
+              {NEUTRAL_TIMELINE_PROTOTYPE_ENABLED && !showEmptyWorkspace ? (
+                <NeutralTimelinePrototype
+                  duration={duration}
+                  currentTime={currentTime}
+                  loops={loops}
+                  activeLoopId={activeLoopId}
+                  activeSegmentId={activeSegmentId}
+                  pxPerSec={minPxPerSec}
+                  onPxPerSecChange={handleNeutralTimelinePxPerSec}
+                  onSeek={handleNeutralTimelineSeek}
+                />
+              ) : null}
+              <div
+                ref={desktopSplitRef}
+                className="flex min-h-0 min-w-0 flex-1 flex-col"
+              >
+                <div
+                  ref={desktopWaveformColumnRef}
+                  className={cn(
+                    "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                    "border-0 px-3 py-2 sm:px-4 sm:py-2.5",
+                  )}
+                >
+                  <div
+                    ref={containerRef}
+                    data-testid="primary-waveform"
+                    className="relative z-0 min-h-0 flex-1 w-full"
+                  />
+                  {showEmptyWorkspace ? (
+                    <WorkspaceEmptyState
+                      onCreateNewProject={handleEmptyWorkspaceCreateProject}
+                      onOpenDemoProject={openDemoFromEmptyWorkspace}
+                      onOpenSavedProject={requestOpenSavedProjectPicker}
+                      savedProjectsBrowseBusy={savedProjectsBrowseBusy}
+                    />
+                  ) : null}
+                  {desktopShiftFocusGuidanceVisible ? (
+                    <DesktopShiftFocusGuidanceStripe />
+                  ) : null}
+                  {!showEmptyWorkspace && desktopPostFocusCreationHint ? (
+                    <DesktopPostFocusLoopHintStripe />
+                  ) : null}
+                </div>
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="Resize waveform and bottom panel"
+                  tabIndex={0}
+                  className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/40 bg-[#0a0806] outline-none hover:bg-stone-900/90 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+                  onPointerDown={onDesktopBottomResizePointerDown}
+                  onPointerMove={onDesktopBottomResizePointerMove}
+                  onPointerUp={onDesktopBottomResizePointerUp}
+                  onPointerCancel={onDesktopBottomResizePointerUp}
+                  onKeyDown={(e) => {
+                    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                    e.preventDefault();
+                    const root = desktopSplitRef.current;
+                    if (!root) return;
+                    const h = root.clientHeight;
+                    const maxBottom = Math.min(
+                      Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
+                      h - DESKTOP_WAVEFORM_MIN,
+                    );
+                    /** Arrow up → taller bottom stack (matches drag-up). */
+                    const delta = e.key === "ArrowUp" ? 8 : -8;
+                    setDesktopBottomStackPx((prev) => {
+                      const next = Math.min(
+                        Math.max(prev + delta, DESKTOP_BOTTOM_STACK_MIN),
+                        Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
+                      );
+                      try {
+                        sessionStorage.setItem(
+                          DESKTOP_BOTTOM_STACK_PX_KEY,
+                          String(Math.round(next)),
+                        );
+                      } catch {
+                        /* private mode */
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  <span className="pointer-events-none h-1 w-10 rounded-full bg-stone-600/90 group-hover:bg-stone-500" />
+                </div>
+                <div
+                  className="flex w-full shrink-0 flex-col overflow-hidden border-t border-stone-800/50 bg-[#050403]"
+                  style={{ maxHeight: desktopBottomStackPx }}
+                >
+                  <DesktopTransportBar
+                    duration={duration}
+                    currentTime={currentTime}
+                    isPlaying={isPlaying}
+                    timelineIdle={playbackChromeIdle}
+                    loopPlaybackEnabled={loopPlaybackEnabled}
+                    canEnableLoopPlayback={Boolean(
+                      activeLoop && activeLoop.end > activeLoop.start,
+                    )}
+                    loopPracticeScope={loopPracticeScope}
+                    hasActivePhrase={Boolean(
+                      activeLoop && activeLoop.end > activeLoop.start,
+                    )}
+                    phraseHasFocusRegions={phraseHasFocusRegions}
+                    regionContextActive={regionContextActive}
+                    activeLoopId={activeLoopId}
+                    editableLoopId={editableLoopId}
+                    onToggleEditContext={handleTransportEditContext}
+                    onDeleteContext={handleTransportDeleteContext}
+                    tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+                    onTogglePlay={handleTransportTogglePlay}
+                    onRestartLoop={() => {
+                      const playback = getPlaybackSurface();
+                      if (!playback || !activeLoopId) return;
+                      const st = useWoodshedStore.getState();
+                      const loop = loops.find((l) => l.id === activeLoopId);
+                      if (!loop) return;
+                      playback.seek(
+                        getRestartSeekSeconds({
+                          loop,
+                          loopPracticeScope: st.loopPracticeScope,
+                          activeSegmentId: st.activeSegmentId,
+                          lastPracticeSegmentIdByPhrase:
+                            st.lastPracticeSegmentIdByPhrase,
+                        }),
+                      );
+                      void playback.play();
+                    }}
+                    onCycleLoopPlaybackMode={() =>
+                      useWoodshedStore.getState().cycleLoopPlaybackMode()
+                    }
+                    onTempoSlider={handleTransportTempo}
+                    formatTime={(t) => formatTime(t)}
+                  />
+                  <DesktopInspectorPanel />
+                </div>
               </div>
-            </div>
+            </>
           ) : null}
         </div>
       </div>
+      {importChoiceOpen && YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED ? (
+        <div
+          className="fixed inset-0 z-[190] flex items-center justify-center bg-black/55 px-4 py-8 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="woodshed-import-choice-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-stone-700/55 bg-stone-950 p-5 shadow-2xl">
+            <h2
+              id="woodshed-import-choice-title"
+              className="text-base font-semibold tracking-tight text-stone-50"
+            >
+              New session
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-stone-500">
+              Upload audio from your device or paste a YouTube link. No audio is
+              downloaded for YouTube projects.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              <Button
+                type="button"
+                className="w-full bg-violet-600 hover:bg-violet-500"
+                onClick={triggerAudioUploadImport}
+              >
+                Upload audio file
+              </Button>
+              <label
+                htmlFor="woodshed-youtube-paste"
+                className="mt-2 block text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500"
+              >
+                YouTube link
+              </label>
+              <textarea
+                id="woodshed-youtube-paste"
+                value={youtubeLinkDraft}
+                onChange={(e) => setYoutubeLinkDraft(e.target.value)}
+                rows={3}
+                spellCheck={false}
+                placeholder="https://www.youtube.com/watch?v=…"
+                className="w-full resize-none rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none ring-violet-500/35 focus-visible:ring-2"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full border-stone-600 bg-stone-900/40 text-stone-100 hover:bg-stone-800/70"
+                onClick={() => void confirmNewYoutubeFromPaste()}
+              >
+                Create YouTube project
+              </Button>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-stone-400 hover:bg-stone-900/60 hover:text-stone-200"
+                onClick={() => {
+                  setImportChoiceOpen(false);
+                  setYoutubeLinkDraft("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 });

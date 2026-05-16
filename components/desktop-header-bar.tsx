@@ -2,7 +2,7 @@
 
 import { MoreHorizontal, Save, Upload } from "lucide-react";
 import type { ComponentProps } from "react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import { HeaderAccount } from "@/components/header-account";
 import {
@@ -53,6 +53,10 @@ export type DesktopHeaderBarProps = {
   hiddenFileProps: Omit<ComponentProps<"input">, "children"> & {
     "data-testid"?: string;
   };
+  /** When true, session picker lists Paste YouTube alongside opening an audio file. */
+  showYoutubeImport?: boolean;
+  /** Opens main-app YouTube paste / new-session flow. */
+  onPasteYoutubeLink?: () => void;
   /**
    * Increment to open the Projects menu from the parent (e.g. empty workspace).
    * Opening is idempotent when the value is unchanged.
@@ -93,6 +97,8 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
     hiddenFileProps,
     projectPickerOpenSignal = 0,
     timelineIdle = false,
+    showYoutubeImport = false,
+    onPasteYoutubeLink,
   } = props;
 
   const [open, setOpen] = useState<OpenMenu>(null);
@@ -167,6 +173,12 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
     requestAnimationFrame(() => onOpenAudioFile());
   };
 
+  const handlePasteYoutubeFromPicker = useCallback(() => {
+    if (!onPasteYoutubeLink) return;
+    setOpen(null);
+    requestAnimationFrame(() => onPasteYoutubeLink());
+  }, [onPasteYoutubeLink]);
+
   return (
     <header
       className="shrink-0 border-b border-stone-800/50 bg-gradient-to-r from-[#090807] via-[#0c0a08] to-[#090807]"
@@ -233,6 +245,10 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
                   showCloudSessions={showCloudSessions}
                   onPickProject={handleProjectPick}
                   onOpenAudioFile={handleOpenAudioFromPicker}
+                  showYoutubeImport={showYoutubeImport}
+                  onPasteYoutubeLink={
+                    showYoutubeImport ? handlePasteYoutubeFromPicker : undefined
+                  }
                   listClassName="max-h-[min(46vh,360px)] px-2 pb-2"
                 />
               </div>

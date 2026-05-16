@@ -33,6 +33,8 @@ export type MobileProjectBottomSheetProps = {
   onSelectProject: (id: string) => void | Promise<void>;
   /** Close sheet then open the hidden audio file input (mobile practice). */
   onOpenAudioFile: () => void;
+  showYoutubeImport?: boolean;
+  onPasteYoutubeLink?: () => void;
 };
 
 export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
@@ -49,6 +51,8 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
     showCloudSessions,
     onSelectProject,
     onOpenAudioFile,
+    showYoutubeImport = false,
+    onPasteYoutubeLink,
   } = props;
   const titleId = useId();
   const sheetRef = useRef<HTMLDivElement | null>(null);
@@ -116,6 +120,14 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
     onClose();
     window.requestAnimationFrame(() => {
       onOpenAudioFile();
+    });
+  };
+
+  const handlePasteYoutubeLink = () => {
+    if (!onPasteYoutubeLink) return;
+    onClose();
+    window.requestAnimationFrame(() => {
+      onPasteYoutubeLink();
     });
   };
 
@@ -191,6 +203,12 @@ export const MobileProjectBottomSheet = memo(function MobileProjectBottomSheet(
               showCloudSessions={showCloudSessions}
               onPickProject={handlePick}
               onOpenAudioFile={handleOpenAudioFile}
+              showYoutubeImport={showYoutubeImport}
+              onPasteYoutubeLink={
+                showYoutubeImport && onPasteYoutubeLink
+                  ? handlePasteYoutubeLink
+                  : undefined
+              }
               listClassName="min-h-0 flex-1 px-3 pb-4"
             />
           </motion.div>
