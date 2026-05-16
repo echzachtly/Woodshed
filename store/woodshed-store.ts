@@ -10,6 +10,7 @@ import {
   type PhraseSegment,
   type PracticeLoop,
 } from "@/lib/loop-engine";
+import { resolveFocusDeletionFallbackId } from "@/lib/focus-playback-segment";
 import { nanoid } from "@/lib/id";
 import {
   DEFAULT_UPLOAD_MEDIA_SOURCE,
@@ -818,14 +819,23 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       const prevSegs = loop?.segments ?? [];
       const nextSegs = prevSegs.filter((x) => x.id !== segmentId);
       const cleared = s.activeSegmentId === segmentId;
+      const fallbackId = resolveFocusDeletionFallbackId({
+        segments: prevSegs,
+        removedSegmentId: segmentId,
+        lastUsedSegmentId: s.lastPracticeSegmentIdByPhrase[phraseId] ?? null,
+      });
       const nextLast = { ...s.lastPracticeSegmentIdByPhrase };
-      if (nextLast[phraseId] === segmentId) {
-        const fallback = nextSegs[0]?.id;
-        if (fallback) nextLast[phraseId] = fallback;
-        else delete nextLast[phraseId];
+      if (nextSegs.length === 0) {
+        delete nextLast[phraseId];
+      } else if (fallbackId) {
+        nextLast[phraseId] = fallbackId;
+      } else {
+        delete nextLast[phraseId];
       }
       let loopPracticeScope = s.loopPracticeScope;
-      if (nextSegs.length === 0) {
+      if (cleared) {
+        loopPracticeScope = fallbackId ? "practice_region" : "phrase";
+      } else if (nextSegs.length === 0) {
         loopPracticeScope = "phrase";
       }
       const nextUnlock = { ...s.focusRegionWaveformEditUnlockedById };
@@ -834,7 +844,7 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
         loops: s.loops.map((l) =>
           l.id === phraseId ? { ...l, segments: nextSegs } : l,
         ),
-        activeSegmentId: cleared ? null : s.activeSegmentId,
+        activeSegmentId: cleared ? fallbackId : s.activeSegmentId,
         loopPracticeScope,
         lastPracticeSegmentIdByPhrase: nextLast,
         focusRegionWaveformEditUnlockedById: nextUnlock,

@@ -77,6 +77,7 @@ import {
 } from "@/lib/focus-region-wave-palette";
 import { formatFilenameAsProjectName } from "@/lib/format-upload-project-name";
 import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
+import { resolveTimelinePlaybackIntent } from "@/lib/interaction/timeline-playback-intent";
 import {
   buildPlaybackLoopRail,
   getRestartSeekSeconds,
@@ -128,7 +129,10 @@ import {
 } from "@/lib/wavesurfer-region-appearance";
 import { isWaveSurferAudioDecoded } from "@/lib/wavesurfer-audio-ready";
 import { reflowWaveSurferForContainer } from "@/lib/wavesurfer-reflow";
-import { applyWheelZoomAnchoredToCursor } from "@/lib/waveform-cursor-zoom";
+import {
+  applyWheelZoomAnchoredToCursor,
+  timeAtWaveformClientX,
+} from "@/lib/waveform-cursor-zoom";
 import {
   DESKTOP_ONBOARDING_UPDATED_EVENT,
   markDesktopFocusLoopCreatedByUser,
@@ -295,6 +299,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const releasePanRef = useRef<(() => void) | null>(null);
   /** Desktop Shift+drag phrase / focus authoring. */
   const releaseShiftAuthoringRef = useRef<(() => void) | null>(null);
+  /** Desktop click parity adapter: WaveSurfer direct-click -> shared timeline intent. */
+  const releaseWaveClickIntentRef = useRef<(() => void) | null>(null);
   /** WaveSurfer mount effect reads this ref — keep in sync with `isMobilePractice`. */
   const mobilePracticeModeRef = useRef(false);
 
@@ -1131,6 +1137,46 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             return { seekTo: phrase.start };
           },
         });
+        releaseWaveClickIntentRef.current?.();
+        releaseWaveClickIntentRef.current = installWaveformClickIntentParity({
+          scrollContainer: panDom.scrollContainer,
+          getWave: () => wavesurferRef.current,
+          getMinPxPerSec: () => useWoodshedStore.getState().minPxPerSec,
+          isMobilePractice: () => mobilePracticeModeRef.current,
+          applyDecisionAndSeek: (seconds) => {
+            const st = useWoodshedStore.getState();
+            const decision = resolveTimelinePlaybackIntent(
+              {
+                duration: st.duration,
+                loops: st.loops,
+                activeLoopId: st.activeLoopId,
+                activeSegmentId: st.activeSegmentId,
+                loopPlaybackEnabled: st.loopPlaybackEnabled,
+                loopPracticeScope: st.loopPracticeScope,
+              },
+              seconds,
+            );
+            if (decision?.selectLoopId) {
+              st.selectLoop(decision.selectLoopId);
+            }
+            if (decision?.selectSegment) {
+              st.selectSegment(
+                decision.selectSegment.phraseId,
+                decision.selectSegment.segmentId,
+              );
+            }
+            if (decision?.setLoopPracticeScope) {
+              st.setLoopPracticeScope(decision.setLoopPracticeScope);
+            }
+            if (decision?.setLoopPlaybackEnabled !== undefined) {
+              st.setLoopPlaybackEnabled(decision.setLoopPlaybackEnabled);
+            }
+            const seekSec = decision?.clampedTime ?? seconds;
+            st.exitPhraseFitAfterUserNavigation();
+            wsPlaybackSurface.seek(seekSec);
+            st.setCurrentTime(seekSec);
+          },
+        });
         pinchZoomReleaseRef.current = installWaveformPinchZoom(ws, {
           isMobilePractice: () => mobilePracticeModeRef.current,
           getStore: () => useWoodshedStore.getState(),
@@ -1338,6 +1384,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       releasePanRef.current = null;
       releaseShiftAuthoringRef.current?.();
       releaseShiftAuthoringRef.current = null;
+      releaseWaveClickIntentRef.current?.();
+      releaseWaveClickIntentRef.current = null;
       pinchZoomReleaseRef.current?.();
       pinchZoomReleaseRef.current = null;
       wavesurferRef.current?.destroy();
@@ -2528,9 +2576,37 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleNeutralTimelineSeek = useCallback(
     (sec: number) => {
-      useWoodshedStore.getState().exitPhraseFitAfterUserNavigation();
-      getPlaybackSurface()?.seek(sec);
-      useWoodshedStore.getState().setCurrentTime(sec);
+      const st = useWoodshedStore.getState();
+      const decision = resolveTimelinePlaybackIntent(
+        {
+          duration: st.duration,
+          loops: st.loops,
+          activeLoopId: st.activeLoopId,
+          activeSegmentId: st.activeSegmentId,
+          loopPlaybackEnabled: st.loopPlaybackEnabled,
+          loopPracticeScope: st.loopPracticeScope,
+        },
+        sec,
+      );
+      if (decision?.selectLoopId) {
+        st.selectLoop(decision.selectLoopId);
+      }
+      if (decision?.selectSegment) {
+        st.selectSegment(
+          decision.selectSegment.phraseId,
+          decision.selectSegment.segmentId,
+        );
+      }
+      if (decision?.setLoopPracticeScope) {
+        st.setLoopPracticeScope(decision.setLoopPracticeScope);
+      }
+      if (decision?.setLoopPlaybackEnabled !== undefined) {
+        st.setLoopPlaybackEnabled(decision.setLoopPlaybackEnabled);
+      }
+      const seekSec = decision?.clampedTime ?? sec;
+      st.exitPhraseFitAfterUserNavigation();
+      getPlaybackSurface()?.seek(seekSec);
+      st.setCurrentTime(seekSec);
     },
     [getPlaybackSurface],
   );
@@ -2967,9 +3043,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                   viewport={viewport}
                   currentTime={currentTime}
                   onNavigate={(seconds) => {
-                    const st = useWoodshedStore.getState();
-                    st.exitPhraseFitAfterUserNavigation();
-                    getPlaybackSurface()?.seek(seconds);
+                    handleNeutralTimelineSeek(seconds);
                   }}
                   onViewportPanToRatio={(ratio) => {
                     const st = useWoodshedStore.getState();
@@ -3316,6 +3390,49 @@ function installWaveformPanGesture(
     container.removeEventListener("click", onClickCapture, true);
     container.style.cursor = "";
     container.classList.remove("is-panning");
+  };
+}
+
+function installWaveformClickIntentParity(args: {
+  scrollContainer: HTMLElement;
+  getWave: () => WaveSurfer | null;
+  getMinPxPerSec: () => number;
+  isMobilePractice: () => boolean;
+  applyDecisionAndSeek: (seconds: number) => void;
+}): () => void {
+  const {
+    scrollContainer,
+    getWave,
+    getMinPxPerSec,
+    isMobilePractice,
+    applyDecisionAndSeek,
+  } = args;
+
+  const onClick = (event: MouseEvent) => {
+    if (event.defaultPrevented) return;
+    if (isMobilePractice()) return;
+    if (event.button !== 0) return;
+    if (event.shiftKey) return;
+    const target = event.target as Element | null;
+    // Do not reinterpret resize-handle releases as intent clicks.
+    if (target?.closest('[part*="region-handle"]')) return;
+
+    const ws = getWave();
+    if (!ws) return;
+    const pxPerSec = getMinPxPerSec();
+    if (!Number.isFinite(pxPerSec) || pxPerSec <= 0) return;
+    const seconds = timeAtWaveformClientX(
+      ws,
+      scrollContainer,
+      event.clientX,
+      pxPerSec,
+    );
+    applyDecisionAndSeek(seconds);
+  };
+
+  scrollContainer.addEventListener("click", onClick);
+  return () => {
+    scrollContainer.removeEventListener("click", onClick);
   };
 }
 
