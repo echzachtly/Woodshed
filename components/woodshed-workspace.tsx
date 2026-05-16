@@ -83,6 +83,7 @@ import {
   resolvePracticeEditCompatibility,
   resolvePracticeEditExitCleanup,
 } from "@/lib/interaction/practice-edit-mode";
+import { deriveRegionVisualState } from "@/lib/regions/region-visual-state";
 import {
   buildPlaybackLoopRail,
 } from "@/lib/playback-loop-rail";
@@ -879,7 +880,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     playback.seek(resolved.restartTargetSeconds);
     st.setCurrentTime(resolved.restartTargetSeconds);
     if (st.activeLoopId !== resolved.resolvedActiveLoopId) {
-      st.setActiveLoopId(resolved.resolvedActiveLoopId);
+      st.selectLoop(resolved.resolvedActiveLoopId);
     }
     if (st.loopPlaybackEnabled !== resolved.resolvedLoopPlaybackEnabled) {
       st.setLoopPlaybackEnabled(resolved.resolvedLoopPlaybackEnabled);
@@ -1575,6 +1576,31 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const phraseWaveUnlocked = Boolean(
       renderedLoop && phraseWaveformEditUnlockedById[renderedLoop.id],
     );
+    const practiceEditCompatibility = resolvePracticeEditCompatibility({
+      editableLoopId,
+      phraseWaveformEditUnlockedById,
+      focusRegionWaveformEditUnlockedById,
+    });
+    const phraseVisualState = renderedLoop
+      ? deriveRegionVisualState({
+          context: {
+            surface: isMobilePractice ? "mobile" : "desktop",
+            activeLoopId,
+            activeSegmentId,
+            editableLoopId,
+            loopPlaybackEnabled,
+            loopPracticeScope,
+            phraseWaveformEditUnlockedById,
+            focusRegionWaveformEditUnlockedById,
+            practiceEditCompatibility,
+          },
+          target: {
+            kind: "phrase",
+            phraseId: renderedLoop.id,
+            phraseHasFocusRegions: Boolean(renderedLoop.segments?.length),
+          },
+        })
+      : null;
     /** M2: Edit Mode — refine selected Practice Section bounds on the waveform (mobile only). */
     const mobilePhraseRefine = Boolean(
       isMobilePractice && mobileEditModeActive && renderedLoop,
@@ -1589,7 +1615,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
      * Mobile: resize when Edit Mode is on for the active (rendered) Practice Section.
      */
     const phraseWaveResizeEnabled =
-      Boolean(phraseWaveUnlocked && !isMobilePractice) || mobilePhraseRefine;
+      Boolean(!isMobilePractice && phraseVisualState?.isEditable) || mobilePhraseRefine;
     const phraseHandleDiagActive =
       phraseWaveResizeEnabled &&
       phraseHandleDiagnosticsEnabled() &&
@@ -1676,7 +1702,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     let focusProbeLogged = false;
 
     const addFocusRegionOverlays = () => {
-      const segmentMobileReadonly = isMobilePractice;
       if (!renderedLoop?.segments?.length) return;
       const segmentsOrdered = [...renderedLoop.segments].sort(
         (a, b) => a.startTime - b.startTime,
@@ -1684,13 +1709,27 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       for (let segIndex = 0; segIndex < segmentsOrdered.length; segIndex++) {
         const seg = segmentsOrdered[segIndex];
         const selected = seg.id === mobileFocusChipSelectedId;
-        const waveformUnlocked = Boolean(
-          focusRegionWaveformEditUnlockedById[seg.id],
-        );
-        const allowSegResize =
-          !segmentMobileReadonly &&
-          selected &&
-          waveformUnlocked;
+        const segVisualState = deriveRegionVisualState({
+          context: {
+            surface: isMobilePractice ? "mobile" : "desktop",
+            activeLoopId,
+            activeSegmentId,
+            editableLoopId,
+            loopPlaybackEnabled,
+            loopPracticeScope,
+            phraseWaveformEditUnlockedById,
+            focusRegionWaveformEditUnlockedById,
+            practiceEditCompatibility,
+          },
+          target: {
+            kind: "focus",
+            phraseId: renderedLoop.id,
+            segmentId: seg.id,
+            phraseHasFocusRegions: phraseHasSegForRegions,
+          },
+        });
+        const segmentMobileReadonly = segVisualState.isMobileReadonly;
+        const allowSegResize = segVisualState.isEditable;
         const paletteIndex = focusRegionWavePaletteIndex(segIndex);
         const paletteSlot = FOCUS_REGION_WAVE_PALETTE[paletteIndex];
         const { start: segStart, end: segEnd } = normalizeWaveSurferRegionBounds({
@@ -1710,7 +1749,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             raw: { startTime: seg.startTime, endTime: seg.endTime },
           });
         }
-        const focusFront = loopPracticeScope === "practice_region" && phraseHasSegForRegions;
+        const focusFront = segVisualState.isFocusForeground;
         const sreg = regions.addRegion({
           id: `seg:${seg.id}`,
           start: segStart,
@@ -1811,8 +1850,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     const addActivePhraseRegion = () => {
       if (!renderedLoop) return;
       const loop = renderedLoop;
-      const isEditing = phraseWaveResizeEnabled;
-      const isActive = loop.id === activeLoopId && !isEditing;
+      const isEditing = phraseWaveResizeEnabled || Boolean(phraseVisualState?.isEditing);
+      const isActive = Boolean(phraseVisualState?.isActive) && !isEditing;
       const allowResize = phraseWaveResizeEnabled;
       const { start: phraseStart, end: phraseEnd } = normalizeWaveSurferRegionBounds({
         startRaw: loop.start,
@@ -1843,7 +1882,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         color: phraseRegionWaveColor(
           isEditing ? "editing" : isActive ? "active" : "locked",
           isMobilePractice,
-          loopPracticeScope === "phrase" || !phraseHasSegForRegions,
+          !(phraseVisualState?.isFocusForeground ?? false),
         ),
         /** Match focus regions: resize handles only (no whole-phrase drag). */
         drag: false,
@@ -2499,6 +2538,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     [duration, getPlaybackSurface],
   );
 
+  const restoreKeyboardFocusToWorkspace = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (isKeyboardFocusInTextField(event.target)) return;
+      sectionRef.current?.focus({ preventScroll: true });
+    },
+    [],
+  );
+
   useEffect(() => {
     if (duration > 0) {
       setAudioTimelineLoading(false);
@@ -2869,6 +2916,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       className="flex min-h-0 flex-1 flex-col overflow-hidden bg-stone-950 text-stone-50 outline-none"
       tabIndex={-1}
       onKeyDown={handleKeyboard}
+      onPointerDownCapture={restoreKeyboardFocusToWorkspace}
       aria-label="Woodshed workspace"
     >
       {showDemoOrientationRibbon ? (
@@ -3142,6 +3190,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                   loops={loops}
                   activeLoopId={activeLoopId}
                   activeSegmentId={activeSegmentId}
+                  loopPracticeScope={loopPracticeScope}
                   pxPerSec={minPxPerSec}
                   onPxPerSecChange={handleNeutralTimelinePxPerSec}
                   onSeek={handleNeutralTimelineSeek}
@@ -3262,7 +3311,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                       playback.seek(resolved.restartTargetSeconds);
                       st.setCurrentTime(resolved.restartTargetSeconds);
                       if (st.activeLoopId !== resolved.resolvedActiveLoopId) {
-                        st.setActiveLoopId(resolved.resolvedActiveLoopId);
+                        st.selectLoop(resolved.resolvedActiveLoopId);
                       }
                       if (
                         st.loopPlaybackEnabled !==

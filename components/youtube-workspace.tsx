@@ -1004,6 +1004,14 @@ export const YoutubeWorkspace = forwardRef<
     [duration, playbackSurface, setCurrentTime, setPlaying],
   );
 
+  const restoreKeyboardFocusToWorkspace = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (isKeyboardFocusInTextField(event.target)) return;
+      sectionRef.current?.focus({ preventScroll: true });
+    },
+    [],
+  );
+
   const handleTransportTogglePlay = useCallback(() => {
     if (!playbackSurface) return;
     if (useWoodshedStore.getState().isPlaying) {
@@ -1102,7 +1110,7 @@ export const YoutubeWorkspace = forwardRef<
     playbackSurface.seek(resolved.restartTargetSeconds);
     st.setCurrentTime(resolved.restartTargetSeconds);
     if (st.activeLoopId !== resolved.resolvedActiveLoopId) {
-      st.setActiveLoopId(resolved.resolvedActiveLoopId);
+      st.selectLoop(resolved.resolvedActiveLoopId);
     }
     if (st.loopPlaybackEnabled !== resolved.resolvedLoopPlaybackEnabled) {
       st.setLoopPlaybackEnabled(resolved.resolvedLoopPlaybackEnabled);
@@ -1137,6 +1145,7 @@ export const YoutubeWorkspace = forwardRef<
       )}
       tabIndex={-1}
       onKeyDown={handleKeyboard}
+      onPointerDownCapture={restoreKeyboardFocusToWorkspace}
       aria-label="Woodshed YouTube workspace"
     >
       {variant === "devPage" ? (
@@ -1260,6 +1269,7 @@ export const YoutubeWorkspace = forwardRef<
                   loops={loops}
                   activeLoopId={activeLoopId}
                   activeSegmentId={activeSegmentId}
+                  loopPracticeScope={loopPracticeScope}
                   pxPerSec={minPxPerSec}
                   onPxPerSecChange={handleNeutralTimelinePxPerSec}
                   onSeek={handleNeutralTimelineSeek}
@@ -1326,6 +1336,7 @@ export const YoutubeWorkspace = forwardRef<
                   loops={loops}
                   activeLoopId={activeLoopId}
                   activeSegmentId={activeSegmentId}
+                  loopPracticeScope={loopPracticeScope}
                   pxPerSec={minPxPerSec}
                   onPxPerSecChange={handleNeutralTimelinePxPerSec}
                   onSeek={handleNeutralTimelineSeek}

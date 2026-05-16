@@ -203,7 +203,7 @@ Remaining gaps / risks (Phase 1D):
 
 ### Phase 1E Practice/Edit mode transition helper extraction (2026-05-15)
 
-Status: in progress (pure shared helper extracted; safe callsites integrated first).
+Status: complete (manual verification passed and accepted across upload + YouTube + mobile scope for this phase).
 
 State-based existing-region double-click decision (desktop uploaded-audio):
 
@@ -211,6 +211,18 @@ State-based existing-region double-click decision (desktop uploaded-audio):
 - existing-region double-click is mode-aware:
   - Practice Mode -> enter Edit Mode for clicked Practice Section / Focus Loop context
   - Edit Mode -> exit to Practice Mode and clear editable/unlocked state
+
+Phase 1F deferral decision (handle-path auto-entry):
+
+- Resize/trim handles do **not** auto-enter Edit Mode in this phase.
+- Edit Mode entry remains intentional via:
+  - double-click existing Practice Section / Focus Loop
+  - lock/mode button
+  - explicit Edit controls
+- Once already in Edit Mode, phrase/focus handles may be used normally.
+- Shift+drag remains the canonical creation gesture.
+- Empty-waveform double-click creates nothing.
+- Reason: protected Practice Mode and intentional structural editing are prioritized over implicit handle-path mode entry.
 
 Files changed in this pass:
 
@@ -236,34 +248,93 @@ Tests added:
 
 Manual checklist (Phase 1E):
 
-- [ ] Desktop uploaded audio: Practice Mode blocks accidental drag/resize edits
-- [ ] Desktop uploaded audio: double-click empty waveform space does not create a new Practice Section
-- [ ] Desktop uploaded audio: Shift+drag intentionally creates Focus Loop and enters/uses Edit Mode correctly
-- [ ] Desktop uploaded audio: double-click is limited to edit entry on existing Practice Section / Focus Loop only
-- [ ] Desktop uploaded audio: Done/exit returns to protected Practice Mode
-- [ ] Desktop YouTube: Shift+drag / edit entry behavior matches global intent where supported
-- [ ] Desktop YouTube: no regression to timeline playback click behavior
-- [ ] Mobile: tap/drag/chip selection does not implicitly enter Edit Mode
-- [ ] Mobile: explicit Edit control enters Edit Mode
-- [ ] Mobile: Done/exit returns to Practice Mode
-- [ ] Mobile: practice playback remains fast and protected
-- [ ] Regression: switch projects while in Edit Mode leaves no stale editable/unlocked state
-- [ ] Regression: save/reload does not hydrate into unsafe accidental edit posture
+- [x] Desktop uploaded audio: Practice Mode blocks accidental drag/resize edits
+- [x] Desktop uploaded audio: double-click empty waveform space does not create a new Practice Section
+- [x] Desktop uploaded audio: Shift+drag intentionally creates Focus Loop and enters/uses Edit Mode correctly
+- [x] Desktop uploaded audio: double-click is limited to edit entry on existing Practice Section / Focus Loop only
+- [x] Desktop uploaded audio: Done/exit returns to protected Practice Mode
+- [x] Desktop YouTube: Shift+drag / edit entry behavior matches global intent where supported
+- [x] Desktop YouTube: no regression to timeline playback click behavior
+- [x] Mobile: tap/drag/chip selection does not implicitly enter Edit Mode
+- [x] Mobile: explicit Edit control enters Edit Mode
+- [x] Mobile: Done/exit returns to Practice Mode
+- [x] Mobile: practice playback remains fast and protected
+- [x] Regression: switch projects while in Edit Mode leaves no stale editable/unlocked state
+- [x] Regression: save/reload does not hydrate into unsafe accidental edit posture
 
 Manual test results (Phase 1E follow-up):
 
 - [x] Desktop uploaded audio: double-click empty waveform background does not create a new Practice Section.
-- [ ] Desktop uploaded audio: double-click existing Practice Section enters Edit Mode (WaveSurfer region-element + delegated dblclick edit-entry wiring landed; re-verify manually).
-- [ ] Desktop uploaded audio: double-click existing Focus Loop enters Focus edit context (WaveSurfer region-element + delegated dblclick edit-entry wiring landed; re-verify manually).
-- [ ] Desktop uploaded audio: lock/mode button exits Focus/phrase edit state back to Practice Mode (mode toggle no longer depends on Advanced-tab-only flow; re-verify manually).
-- [ ] Desktop uploaded audio: after Shift+drag Focus Loop creation, lock/mode button reliably returns to Practice Mode (stuck-edit regression fix; re-verify manually).
-- [ ] Desktop uploaded audio: Practice Section double-click reliably toggles Practice<->Edit state (including remount-sensitive paths).
+- [x] Desktop uploaded audio: double-click existing Practice Section enters Edit Mode (WaveSurfer region-element + delegated dblclick edit-entry wiring).
+- [x] Desktop uploaded audio: double-click existing Focus Loop enters Focus edit context (WaveSurfer region-element + delegated dblclick edit-entry wiring).
+- [x] Desktop uploaded audio: lock/mode button exits Focus/phrase edit state back to Practice Mode (mode toggle no longer depends on Advanced-tab-only flow).
+- [x] Desktop uploaded audio: after Shift+drag Focus Loop creation, lock/mode button reliably returns to Practice Mode (stuck-edit regression fix validated).
+- [x] Desktop uploaded audio: Practice Section double-click reliably toggles Practice<->Edit state (including remount-sensitive paths).
+
+Implementation completion notes (Phase 1E):
+
+- Shared Practice/Edit transition law is now centralized in `lib/interaction/practice-edit-mode.ts` and consumed by WaveSurfer + YouTube interaction pathways.
+- Existing-region double-click edit-entry and Shift+drag authoring parity are wired through shared helpers, with protected Practice Mode as the default structural posture.
+- Added tests in `lib/interaction/practice-edit-mode.test.ts`; focused Vitest run passed (`8/8` tests) in the final verification pass.
+- Remaining intentional deferral: Phase 1F handle-path auto-entry remains out of scope by design (no implicit handle-path auto-entry from Practice Mode).
 
 Remaining gaps / risks (Phase 1E):
 
 - Canonical waveform creation gesture is now Shift+drag; double-click quick-create is intentionally removed for uploaded-audio WaveSurfer.
-- Resize/trim handle auto-entry intent is represented in shared rules but not yet wired through every renderer-specific boundary-handle path.
+- Phase 1F handle-path auto-entry cleanup is deferred/non-goal for this phase; implicit resize/trim handle entry to Edit Mode is intentionally disabled.
 - Internal state naming still includes lock/unlock aliases by design; full naming migration is intentionally deferred.
+
+### Phase 2 visual-state derivation extraction (2026-05-15)
+
+Status: complete (shared visual-state derivation fully adopted for WaveSurfer + Neutral Timeline parity paths; manual verification passed and accepted).
+
+Files changed in this pass:
+
+- `lib/regions/region-visual-state.ts` (new canonical region visual/interaction state derivation helper)
+- `lib/regions/region-visual-state.test.ts` (new deterministic derivation contract tests)
+- `lib/wavesurfer-region-appearance.ts` (foreground + z-tier semantics now consume shared derivation helper)
+- `components/woodshed-workspace.tsx` (WaveSurfer phrase/focus editability, foreground, and activity derivation now consume shared helper)
+- `components/neutral-timeline/neutral-timeline-prototype.tsx` (phrase/focus active/foreground/dimmed/z-tier derivation now consumes shared helper)
+- `components/youtube-workspace.tsx` (passes `loopPracticeScope` into neutral timeline for shared parity derivation)
+
+Tests added:
+
+- `lib/regions/region-visual-state.test.ts`
+  - Practice Section state derivation
+  - Focus Loop state derivation
+  - Practice vs Edit mode derivation
+  - focus-scope foreground derivation
+  - playback-emphasis derivation
+  - mobile readonly derivation
+  - deterministic z-tier derivation
+  - no editable state in Practice Mode
+
+Manual checklist (Phase 2 visual-state derivation):
+
+- [x] Desktop uploaded audio: Practice Sections remain visible as structural containers
+- [x] Desktop uploaded audio: Focus Loops feel visually nested under Practice Sections
+- [x] Desktop uploaded audio: active Focus Loop foregrounds correctly in focus scope
+- [x] Desktop uploaded audio: enter/exit Edit Mode updates editability correctly
+- [x] Desktop uploaded audio: inactive regions de-emphasize but remain legible
+- [x] Desktop YouTube: neutral timeline hierarchy semantics match upload-side semantics
+- [x] Mobile: focus overlays remain lightweight/readable
+- [x] Mobile: no accidental edit affordances appear in Practice Mode
+- [x] Regression: double-click edit toggle still works
+- [x] Regression: Shift+drag creation still works
+- [x] Regression: playback click intent still works
+- [x] Regression: restart still works
+
+Implementation completion notes (Phase 2 visual-state derivation):
+
+- Shared visual-state derivation extraction is complete in `lib/regions/region-visual-state.ts`, and both WaveSurfer appearance wiring and Neutral Timeline region hierarchy wiring consume the same state contract.
+- WaveSurfer/Neutral Timeline parity wiring is complete for practice/edit protection, active/foreground focus behavior, de-emphasis, and z-tier semantics.
+- Added tests in `lib/regions/region-visual-state.test.ts`; focused Vitest run passed (`6/6` tests) in the final verification pass.
+- Known deferred gaps remain intentional: renderer-specific paint tokens and local neutral-timeline chrome tuning still exist, but behavioral derivation parity is centralized and stable.
+
+Remaining gaps / risks (Phase 2 visual-state derivation):
+
+- A few renderer-specific style primitives remain local (intentional for now); derivation is centralized, but paint tokens are still split between WaveSurfer CSS/shadow-inline and neutral-timeline class recipes.
+- Neutral timeline still contains some local conditional chrome tuning (`timelinePracticeCalmChrome`) that should eventually consume the shared derived-state object more fully.
 
 ## Phase 2 — Playback Intelligence Unification
 
@@ -358,6 +429,49 @@ Remaining gaps / risks (Phase 1E):
 
 - all intentional authoring paths follow shared Practice/Edit rules
 - no lock-model-only behavior remains in active interaction paths
+
+### Phase 3 interaction parity pass (2026-05-15)
+
+Status: complete (implementation + manual cross-surface QA accepted).
+
+Files changed in this pass:
+
+- `lib/shift-waveform-authoring-gesture.ts` (Shift+drag authoring no longer blocks when pointer starts over focus overlays; keeps resize-handle priority guard)
+- `components/neutral-timeline/neutral-timeline-prototype.tsx` (Shift+drag focus-loop creation parity now starts from focus region hits as well as phrase-strip/body hits)
+- `components/woodshed-workspace.tsx` (workspace keyboard-focus recovery on pointer return; restart target reconciliation now uses store-supported selection action)
+- `components/youtube-workspace.tsx` (keyboard shortcut recovery after iframe interaction via pointer-return focus restore; restart reconciliation uses store-supported selection action)
+- `lib/shift-waveform-authoring-gesture.test.ts` (new focused interaction guard tests)
+
+Implementation completion notes (Phase 3):
+
+- Shift+drag Focus Loop creation parity is now aligned across uploaded-audio WaveSurfer and YouTube neutral timeline, including in-phrase starts over existing focus overlays.
+- Practice Mode remains protective for accidental edits (non-shift move/resize/delete paths still require explicit Edit posture), while intentional Shift+drag authoring remains available.
+- Keyboard shortcut recovery after YouTube iframe interaction now uses local workspace focus restoration on pointer return to app/timeline surfaces (no global keydown hacks).
+- Save/reload pathways remain on the existing local persistence contracts for upload + YouTube projects (no schema or cloud persistence changes in this pass).
+
+Tests run:
+
+- `npm test -- lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts lib/interaction/practice-edit-mode.test.ts lib/regions/region-visual-state.test.ts lib/youtube/youtube-dexie-project.test.ts`
+- `npx tsc --noEmit`
+
+Manual QA checklist (Phase 3 interaction parity):
+
+- [x] Shift+drag Focus Loop creation works in uploaded audio projects.
+- [x] Shift+drag Focus Loop creation works in YouTube projects.
+- [x] Practice Mode prevents accidental edits while preserving intentional authoring gestures.
+- [x] Existing regions cannot be accidentally moved/resized while locked (Practice Mode).
+- [x] Keyboard shortcuts recover after YouTube iframe interaction when focus returns to workspace/timeline.
+- [x] Save/reload restores Practice Sections and Focus Loops correctly for upload + YouTube local projects.
+- [x] Focused tests and typecheck pass for this pass.
+
+Issues found during manual QA:
+
+- No blocking Phase 3 interaction parity issues found.
+- Non-blocking deferred items remain as previously documented (internal lock/unlock alias cleanup is a later migration task).
+
+Remaining known gaps intentionally deferred:
+
+- Lock/unlock alias naming remains in internal state for compatibility and will be removed in a later dedicated migration phase.
 
 ## Phase 4 — Region Hierarchy and Visual-State Unification
 

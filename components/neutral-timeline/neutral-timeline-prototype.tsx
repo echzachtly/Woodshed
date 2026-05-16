@@ -57,11 +57,14 @@ import {
   shiftDragShouldCreateFocusInsideActivePhrase,
 } from "@/lib/shift-waveform-authoring";
 import { applyNeutralTimelineWheelZoomAnchoredToCursor } from "@/lib/neutral-timeline-wheel-zoom";
+import { resolvePracticeEditCompatibility } from "@/lib/interaction/practice-edit-mode";
+import { deriveRegionVisualState, type RegionZIndexTier } from "@/lib/regions/region-visual-state";
 import {
   enterFocusLoopStructuralEdit,
   enterPracticeSectionStructuralEdit,
   isStructuralPracticeMode,
 } from "@/lib/woodshed-enter-region-edit";
+import type { LoopPracticeScope } from "@/store/woodshed-store";
 
 export type SyntheticTimelineAuthoringConfig = {
   enabled: boolean;
@@ -113,6 +116,7 @@ export type NeutralTimelinePrototypeProps = {
   loops: PracticeLoop[];
   activeLoopId: string | null;
   activeSegmentId: string | null;
+  loopPracticeScope?: LoopPracticeScope;
   pxPerSec: number;
   onPxPerSecChange: (nextPxPerSec: number) => void;
   onSeek: (seconds: number) => void;
@@ -162,6 +166,38 @@ const NOOP_AUTHORING_CTX: SyntheticTimelineAuthoringConfig = {
   onPhraseBoundsCommit: noopPhraseCommit,
   onSegmentBoundsCommit: noopSeg,
 };
+
+function neutralPhraseZ(tier: RegionZIndexTier, paintIx: number): number {
+  switch (tier) {
+    case "section_editing_foreground":
+      return 28 + paintIx;
+    case "section_active_foreground":
+      return 26 + paintIx;
+    case "section_editing_context":
+      return 14 + paintIx;
+    case "section_active_context":
+      return 12 + paintIx;
+    default:
+      return 10 + paintIx;
+  }
+}
+
+function neutralFocusZ(tier: RegionZIndexTier): number {
+  switch (tier) {
+    case "focus_editing_foreground":
+      return 36;
+    case "focus_active_foreground":
+      return 34;
+    case "focus_inactive_foreground":
+      return 33;
+    case "focus_editing_context":
+      return 33;
+    case "focus_active_context":
+      return 32;
+    default:
+      return 31;
+  }
+}
 
 type Gesture =
   | {
@@ -259,6 +295,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     loops,
     activeLoopId,
     activeSegmentId,
+    loopPracticeScope = "phrase",
     pxPerSec,
     onPxPerSecChange,
     onSeek,
@@ -307,6 +344,24 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
   const phraseOverlayActive = Boolean(auth);
   const phraseUnlockMapProvided = auth?.phraseWaveformEditUnlockedById !== undefined;
   const focusUnlockMapProvided = auth?.focusRegionWaveformEditUnlockedById !== undefined;
+  const practiceEditCompatibility = useMemo(() => {
+    if (!auth) {
+      return resolvePracticeEditCompatibility({
+        editableLoopId: null,
+        phraseWaveformEditUnlockedById: {},
+        focusRegionWaveformEditUnlockedById: {},
+      });
+    }
+    const phraseUnlockMap = auth.phraseWaveformEditUnlockedById ?? {};
+    const focusUnlockMap = auth.focusRegionWaveformEditUnlockedById ?? {};
+    const editableLoopId =
+      auth.enabled && auth.activeLoopId ? auth.activeLoopId : null;
+    return resolvePracticeEditCompatibility({
+      editableLoopId,
+      phraseWaveformEditUnlockedById: phraseUnlockMap,
+      focusRegionWaveformEditUnlockedById: focusUnlockMap,
+    });
+  }, [auth]);
 
   const phraseBoundaryEditable = useCallback(
     (loopId: string) => {
@@ -992,6 +1047,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       segment: PhraseSegment,
     ) => {
       if (!phraseOverlayActive || !auth || event.button !== 0) return;
+      if (event.shiftKey) {
+        event.stopPropagation();
+        auth.onSelectPhrase(loop.id);
+        beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
+        return;
+      }
       event.stopPropagation();
       if (auth.onPlaybackIntentTap) {
         auth.onPlaybackIntentTap(secsFromClient(event.clientX));
@@ -999,7 +1060,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         auth.onSelectFocus(loop.id, segment.id);
       }
     },
-    [auth, phraseOverlayActive, secsFromClient],
+    [auth, beginDraftShiftGesture, phraseOverlayActive, secsFromClient],
   );
 
   const segmentBodyMoveDown = useCallback(
@@ -1009,6 +1070,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       segment: PhraseSegment,
     ) => {
       if (!auth || !phraseOverlayActive || event.button !== 0) return;
+      if (event.shiftKey) {
+        event.stopPropagation();
+        auth.onSelectPhrase(loop.id);
+        beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
+        return;
+      }
       if (!focusSegmentBoundaryEditable(segment.id)) return;
       event.stopPropagation();
       auth.onSelectFocus(loop.id, segment.id);
@@ -1035,6 +1102,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     },
     [
       auth,
+      beginDraftShiftGesture,
       focusSegmentBoundaryEditable,
       phraseOverlayActive,
       bindGestureHooks,
@@ -1268,12 +1336,32 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                 const pxL = secondsToContentPx(loop.start, pxPerSec);
                 const pxR = secondsToContentPx(loop.end, pxPerSec);
                 const w = Math.max(3, pxR - pxL);
-                const phraseActive = activeLoopId === loop.id;
+                const phraseState = deriveRegionVisualState({
+                  context: {
+                    surface: "desktop",
+                    activeLoopId,
+                    activeSegmentId,
+                    editableLoopId: auth?.enabled ? auth.activeLoopId : null,
+                    loopPlaybackEnabled: playbackActive,
+                    loopPracticeScope,
+                    phraseWaveformEditUnlockedById:
+                      auth?.phraseWaveformEditUnlockedById ?? {},
+                    focusRegionWaveformEditUnlockedById:
+                      auth?.focusRegionWaveformEditUnlockedById ?? {},
+                    practiceEditCompatibility,
+                  },
+                  target: {
+                    kind: "phrase",
+                    phraseId: loop.id,
+                    phraseHasFocusRegions: Boolean(loop.segments?.length),
+                  },
+                });
+                const phraseActive = phraseState.isSectionActive;
                 /** Horizontal padding aligning nested focus rects with lane insets (~pl-3 + ring). */
                 const innerPadX = 11;
                 /** Space reserved for Practice Section heading above the drill lane. */
                 const laneTopPx = 32;
-                const phraseStackZ = (phraseActive ? 26 : 10) + paintIx;
+                const phraseStackZ = neutralPhraseZ(phraseState.zIndexTier, paintIx);
 
                 return (
                   <div
@@ -1389,13 +1477,32 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                           const absR = secondsToContentPx(segment.endTime, pxPerSec);
                           const segPxLRel = Math.max(0, absL - pxL - innerPadX);
                           const segW = Math.max(4, absR - absL);
-                          const activeSeg = segment.id === activeSegmentId;
+                          const focusState = deriveRegionVisualState({
+                            context: {
+                              surface: "desktop",
+                              activeLoopId,
+                              activeSegmentId,
+                              editableLoopId: auth?.enabled ? auth.activeLoopId : null,
+                              loopPlaybackEnabled: playbackActive,
+                              loopPracticeScope,
+                              phraseWaveformEditUnlockedById:
+                                auth?.phraseWaveformEditUnlockedById ?? {},
+                              focusRegionWaveformEditUnlockedById:
+                                auth?.focusRegionWaveformEditUnlockedById ?? {},
+                              practiceEditCompatibility,
+                            },
+                            target: {
+                              kind: "focus",
+                              phraseId: loop.id,
+                              segmentId: segment.id,
+                              phraseHasFocusRegions: Boolean(loop.segments?.length),
+                            },
+                          });
+                          const activeSeg = focusState.isFocusActive;
                           const chipHoverLink =
                             timelineHoverSegmentId === segment.id &&
                             !activeSeg;
-                          const focusEditable =
-                            phraseOverlayActive &&
-                            focusSegmentBoundaryEditable(segment.id);
+                          const focusEditable = phraseOverlayActive && focusState.isEditable;
 
                           const segClass = cn(
                             "absolute top-2 bottom-2 rounded-lg transition-[background-color,border-color,box-shadow] duration-150",
@@ -1410,10 +1517,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                                 : "border border-emerald-300/30 bg-emerald-400/[0.11] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_0_16px_rgba(167,243,208,0.065)] ring-1 ring-emerald-200/26"
                               : chipHoverLink
                                 ? "border border-emerald-300/35 bg-emerald-400/[0.09] ring-1 ring-emerald-200/35 shadow-[inset_0_0_12px_rgba(167,243,208,0.08)]"
-                                : "border border-white/[0.055] bg-emerald-500/[0.058] hover:border-emerald-400/24 hover:bg-emerald-400/[0.095]",
+                                : focusState.isDimmed
+                                  ? "border border-white/[0.05] bg-emerald-500/[0.052] hover:border-emerald-400/22 hover:bg-emerald-400/[0.085]"
+                                  : "border border-white/[0.06] bg-emerald-500/[0.06] hover:border-emerald-400/24 hover:bg-emerald-400/[0.095]",
                           );
 
-                          const zRaise = activeSeg ? 34 : 32;
+                          const zRaise = neutralFocusZ(focusState.zIndexTier);
 
                           return (
                             <div

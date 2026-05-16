@@ -12,6 +12,14 @@ export type ShiftWaveformAuthoringCommit = (args: {
   endSec: number;
 }) => { seekTo: number } | null;
 
+export function shouldIgnoreShiftAuthoringPointerTarget(
+  target: Element | null,
+): boolean {
+  return Boolean(
+    target?.closest('.woodshed-region-editing [part*="region-handle"]'),
+  );
+}
+
 /**
  * Desktop-only Shift+drag on the waveform scroll container.
  * Uses capture on pointerdown so WaveSurfer seek/pan do not steal the gesture.
@@ -86,12 +94,12 @@ export function installShiftWaveformAuthoringGesture(args: {
     if (isMobilePractice()) return;
     if (!event.shiftKey || event.button !== 0) return;
     const target = event.target as Element | null;
-    if (target?.closest('.woodshed-region-editing [part*="region-handle"]')) {
+    if (shouldIgnoreShiftAuthoringPointerTarget(target)) {
       return;
     }
-    if (target?.closest(".woodshed-region-segment")) {
-      return;
-    }
+    // Shift+drag is the intentional authoring gesture, so allow it even when the
+    // pointer starts over focus overlays; this keeps focus-loop creation parity
+    // with neutral timeline behavior while still preserving locked non-shift safety.
 
     event.preventDefault();
     event.stopImmediatePropagation();
