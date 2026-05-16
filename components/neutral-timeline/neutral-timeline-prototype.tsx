@@ -1,18 +1,19 @@
 "use client";
 
 /**
- * Synthetic (neutral) timeline — ruler + faux waveform + overlays.
+ * Synthetic (neutral) timeline — ruler + faux waveform + overlays (non-upload sources).
  *
- * **WaveSurfer vs synthetic authoring:** Upload workspace regions are RegionsPlugin handles on decoded
- * waveform pixels; this strip maps **pixels → seconds** only (`pointerClientToSeconds`). All bounds
- * clamping mirrors store expectations (`updateLoopBounds` → `clampSegmentsToPhraseBounds` for phrases).
+ * **WaveSurfer vs synthetic:** RegionsPlugin uses decoded waveform pixels; this strip maps
+ * **pointer X → seconds** via `pointerClientToSeconds` only. Bounds clamping matches store expectations
+ * (`updateLoopBounds`, `updateSegment`, `clampSegmentsToPhraseBounds`).
  *
- * **Gesture separation:** Explicit **Pan timeline** vs **Edit timeline**.
- * - Pan — horizontal drag scrolls; release without movement seeks (except over zoom chrome).
- * - Edit — ruler stays non-authoring/non-seek by design (use Pan mode to scrub ticks); empty phrase-band
- *   tap seeks; phrase-band drag creates Practice Sections when the Section tool is active; active
- *   phrase + Focus tool + drag in the lower band authors Focus Loops. Regions use `pointerdown`
- *   `stopPropagation` so scrub/tap-drag never competes with body/handle dragging.
+ * **Uploaded-audio parity (when `authoring.enabled`):**
+ * - Plain click+drag on the strip = **pan/scroll** (like the main waveform).
+ * - **Shift+drag** uses the same rule as `shiftDragShouldCreateFocusInsideActivePhrase`; when
+ *   `phraseWaveformEditUnlockedById` is supplied (YouTube/desktop parity), commits only while the
+ *   active Practice Section waveform is unlocked in the store (`editableLoopId` / transport lock).
+ * - Region `pointerdown` handlers `stopPropagation` so pan/shift-draft never steals phrase/focus edits.
+ * - Phrase / focus boundaries follow optional unlock maps mirroring WaveSurfer (see authoring type).
  */
 
 import {
@@ -41,25 +42,32 @@ import {
   clampPhraseStartEnd,
   clampSegmentMoveDeltaInPhrase,
   clampSegmentStartEndInPhrase,
-  frontmostPhraseAtTime,
   minPhraseOrSegmentSpanSec,
   secondsDeltaFromPixelDelta,
 } from "@/components/neutral-timeline/synthetic-timeline-regions";
+import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
 
 export type SyntheticTimelineAuthoringConfig = {
   enabled: boolean;
-  interactionMode: "pan" | "edit";
-  onInteractionModeChange: (mode: "pan" | "edit") => void;
-  editTool: "section" | "focus";
-  onEditToolChange: (tool: "section" | "focus") => void;
-  activePhraseId: string | null;
-  onPhraseBandDragCreate: (startSec: number, endSec: number) => void;
-  onFocusBandDragCreate: (
+  /** Store’s active Practice Section (`activeLoopId`) — drives Shift+drag focus vs phrase decision. */
+  activeLoopId: string | null;
+  /**
+   * When provided, mirrors desktop WaveSurfer gating (`phraseWaveformEditUnlockedById`).
+   * Omitted ⇒ legacy parity strip (anything `enabled` implies is interactable).
+   */
+  phraseWaveformEditUnlockedById?: Record<string, true>;
+  /**
+   * When provided, mirrors desktop focus overlays (`focusRegionWaveformEditUnlockedById` + selection).
+   * Omitted ⇒ legacy parity strip behavior.
+   */
+  focusRegionWaveformEditUnlockedById?: Record<string, true>;
+  onShiftPhraseDragCreate: (startSec: number, endSec: number) => void;
+  onShiftFocusDragCreate: (
     phraseId: string,
     startSec: number,
     endSec: number,
   ) => void;
-  onSelectPhrase: (id: string | null) => void;
+  onSelectPhrase: (id: string) => void;
   onSelectFocus: (phraseId: string, segmentId: string) => void;
   onPhraseBoundsCommit: (phraseId: string, startSec: number, endSec: number) => void;
   onSegmentBoundsCommit: (
@@ -82,25 +90,32 @@ export type NeutralTimelinePrototypeProps = {
   authoring?: SyntheticTimelineAuthoringConfig;
 };
 
-const RULER_H = 26;
-const TRACK_BAND_PX = 52;
+const RULER_H = 36;
+/** Initial faux-wave height before `ResizeObserver` measures the waveform column (WaveSurfer-like fill). */
+const TRACK_BAND_PX_DEFAULT = 148;
+const TRACK_BAND_MIN_PX = 92;
+const TRACK_BAND_MAX_PX = 560;
 const PAN_SLOP_PX = 4;
 const PHRASE_BAND_END_FRAC_OF_TRACK = 0.58;
 
 const noop = () => {};
+const noopNum2 = (_a: number, _b: number) => {};
+const noopPhraseFocus = (_p: string, _a: number, _b: number) => {};
+const noopSelectFocus = (_p: string, _s: string) => {};
+const noopSeg = (_pi: string, _si: string, _a: number, _b: number) => {};
+const noopPhraseCommit = (_id: string, _a: number, _b: number) => {};
+const noopSelectPhrase = (_id: string) => {};
 const NOOP_AUTHORING_CTX: SyntheticTimelineAuthoringConfig = {
   enabled: false,
-  interactionMode: "pan",
-  onInteractionModeChange: noop,
-  editTool: "section",
-  onEditToolChange: noop,
-  activePhraseId: null,
-  onPhraseBandDragCreate: noop,
-  onFocusBandDragCreate: noop,
-  onSelectPhrase: noop,
-  onSelectFocus: noop,
-  onPhraseBoundsCommit: noop,
-  onSegmentBoundsCommit: noop,
+  activeLoopId: null,
+  phraseWaveformEditUnlockedById: undefined,
+  focusRegionWaveformEditUnlockedById: undefined,
+  onShiftPhraseDragCreate: noopNum2,
+  onShiftFocusDragCreate: noopPhraseFocus,
+  onSelectPhrase: noopSelectPhrase,
+  onSelectFocus: noopSelectFocus,
+  onPhraseBoundsCommit: noopPhraseCommit,
+  onSegmentBoundsCommit: noopSeg,
 };
 
 type Gesture =
@@ -112,16 +127,8 @@ type Gesture =
       moved: boolean;
     }
   | {
-      mode: "draftPhrase";
+      mode: "draftShift";
       pid: number;
-      aSec: number;
-      ax: number;
-      moved: boolean;
-    }
-  | {
-      mode: "draftFocus";
-      pid: number;
-      phraseId: string;
       aSec: number;
       ax: number;
       moved: boolean;
@@ -199,11 +206,13 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     duration: 0 as number,
     pxPerSec: 1 as number,
     loops: [] as PracticeLoop[],
+    activeLoopId: null as string | null,
   });
 
   liveRef.current.duration = duration;
   liveRef.current.pxPerSec = pxPerSec;
   liveRef.current.loops = loops;
+  liveRef.current.activeLoopId = activeLoopId;
 
   const gestureUnhookRef = useRef<(() => void) | null>(null);
 
@@ -216,8 +225,48 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
   const [ghostNonce, setGhostTick] = useState(0);
   const bumpGhost = useCallback(() => setGhostTick((n) => n + 1), []);
 
+  /** Faux waveform band height fills the waveform column minus the ruler row (desktop WaveSurfer parity). */
+  const [trackBandPx, setTrackBandPx] = useState(TRACK_BAND_PX_DEFAULT);
+  const phraseStripPx = useMemo(
+    () => trackBandPx * PHRASE_BAND_END_FRAC_OF_TRACK,
+    [trackBandPx],
+  );
+  const focusStripPx = trackBandPx - phraseStripPx;
+
   const auth = authoring;
   const authOn = Boolean(auth?.enabled);
+  /** Desktop-style maps from `woodshed-store` — omitted on legacy overlay strips (`woodshed-workspace` dev rail). */
+  const phraseUnlockMapProvided = auth?.phraseWaveformEditUnlockedById !== undefined;
+  const focusUnlockMapProvided = auth?.focusRegionWaveformEditUnlockedById !== undefined;
+
+  const phraseBoundaryEditable = useCallback(
+    (loopId: string) => {
+      if (!phraseUnlockMapProvided) return true;
+      return Boolean(auth?.phraseWaveformEditUnlockedById?.[loopId]);
+    },
+    [auth?.phraseWaveformEditUnlockedById, phraseUnlockMapProvided],
+  );
+
+  const focusSegmentBoundaryEditable = useCallback(
+    (segmentId: string) => {
+      if (!focusUnlockMapProvided) return true;
+      if (segmentId !== activeSegmentId) return false;
+      return Boolean(auth?.focusRegionWaveformEditUnlockedById?.[segmentId]);
+    },
+    [
+      activeSegmentId,
+      auth?.focusRegionWaveformEditUnlockedById,
+      focusUnlockMapProvided,
+    ],
+  );
+
+  const shiftAuthoringAllowed =
+    Boolean(auth?.enabled) &&
+    (!phraseUnlockMapProvided ||
+      Boolean(
+        auth?.activeLoopId &&
+          auth.phraseWaveformEditUnlockedById?.[auth.activeLoopId],
+      ));
 
   const logicalWidth = useMemo(
     () => timelineLogicalWidthPx(duration, pxPerSec),
@@ -290,6 +339,26 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
   useEffect(() => {
     const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const measure = () => {
+      const usable = Math.floor(el.clientHeight - RULER_H - 12);
+      const next = Math.min(
+        TRACK_BAND_MAX_PX,
+        Math.max(TRACK_BAND_MIN_PX, usable),
+      );
+      setTrackBandPx((prev) => (prev === next ? prev : next));
+      refreshScrollMetrics();
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [refreshScrollMetrics]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
     if (!el || !(duration > 0)) return;
     const px = secondsToContentPx(currentTime, pxPerSec);
     const visibleStart = el.scrollLeft;
@@ -348,11 +417,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       const ry = evt.clientY - r.top - RULER_H;
       if (ry < 0) return "ruler" as const;
       const y = ry;
-      return y <= TRACK_BAND_PX * PHRASE_BAND_END_FRAC_OF_TRACK
-        ? ("phrase" as const)
-        : ("focus" as const);
+      return y <= phraseStripPx ? ("phrase" as const) : ("focus" as const);
     },
-    [],
+    [phraseStripPx],
   );
 
   const installGestureHooks = useCallback(
@@ -378,15 +445,42 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
           return;
         }
 
-        if (g.mode === "draftPhrase") {
+        if (g.mode === "draftShift") {
+          const shiftAllowed =
+            ctx.enabled &&
+            (!ctx.phraseWaveformEditUnlockedById ||
+              Boolean(
+                ctx.activeLoopId &&
+                  ctx.phraseWaveformEditUnlockedById[ctx.activeLoopId],
+              ));
+          if (!shiftAllowed) return;
           if (Math.abs(e.clientX - g.ax) >= PAN_SLOP_PX) g.moved = true;
-          if (!(g.moved && ctx.editTool === "section")) return;
+          if (!g.moved) return;
           const lo = Math.min(g.aSec, secNow);
           const hi = Math.max(g.aSec, secNow);
+          const activePhrase =
+            ctx.activeLoopId != null
+              ? live.loops.find((l) => l.id === ctx.activeLoopId)
+              : undefined;
           if (
-            frontmostPhraseAtTime(live.loops, lo) ||
-            frontmostPhraseAtTime(live.loops, hi)
+            shiftDragShouldCreateFocusInsideActivePhrase(activePhrase, lo, hi) &&
+            activePhrase
           ) {
+            let loCl = Math.max(lo, activePhrase.start);
+            let hiCl = Math.min(hi, activePhrase.end);
+            if (!(hiCl > loCl)) {
+              ghostFocusRef.current = null;
+              ghostPhraseRef.current = null;
+              bumpGhost();
+              return;
+            }
+            const cl = clampSegmentStartEndInPhrase(
+              loCl,
+              hiCl,
+              activePhrase.start,
+              activePhrase.end,
+            );
+            ghostFocusRef.current = [cl.start, cl.end];
             ghostPhraseRef.current = null;
             bumpGhost();
             return;
@@ -398,27 +492,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
           return;
         }
 
-        if (g.mode === "draftFocus") {
-          if (Math.abs(e.clientX - g.ax) >= PAN_SLOP_PX) g.moved = true;
-          const phrase = live.loops.find((l) => l.id === g.phraseId);
-          if (!phrase || !(g.moved && ctx.editTool === "focus")) return;
-          let lo = Math.min(g.aSec, secNow);
-          let hi = Math.max(g.aSec, secNow);
-          lo = Math.max(lo, phrase.start);
-          hi = Math.min(hi, phrase.end);
-          if (!(hi > lo)) {
-            ghostFocusRef.current = null;
-            bumpGhost();
-            return;
-          }
-          const cl = clampSegmentStartEndInPhrase(lo, hi, phrase.start, phrase.end);
-          ghostFocusRef.current = [cl.start, cl.end];
-          ghostPhraseRef.current = null;
-          bumpGhost();
-          return;
-        }
-
-        if (!ctx.enabled || ctx.interactionMode !== "edit") return;
+        if (!ctx.enabled) return;
 
         if (g.mode === "phraseMove") {
           const dx = e.clientX - g.ax;
@@ -519,43 +593,51 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
         const secTap = secsFromClient(e.clientX);
 
-        if (g.mode === "draftPhrase") {
+        if (g.mode === "draftShift") {
           if (!(live.duration > 0)) return;
           if (!g.moved) {
             onSeek(secTap);
             return;
           }
-          const ghost = ghostPhraseDraft;
-          if (
-            ghost &&
+          const shiftAllowed =
             ctx.enabled &&
-            ghost[1] - ghost[0] >= minPhraseOrSegmentSpanSec(live.duration) - 1e-9
+            (!ctx.phraseWaveformEditUnlockedById ||
+              Boolean(
+                ctx.activeLoopId &&
+                  ctx.phraseWaveformEditUnlockedById[ctx.activeLoopId],
+              ));
+          if (!shiftAllowed) return;
+          const fg = ghostFocusDraft;
+          const pg = ghostPhraseDraft;
+          const activePhrase =
+            ctx.activeLoopId != null
+              ? live.loops.find((l) => l.id === ctx.activeLoopId)
+              : undefined;
+          const phraseDur =
+            activePhrase && activePhrase.end > activePhrase.start
+              ? activePhrase.end - activePhrase.start
+              : live.duration;
+          const minDur = minPhraseOrSegmentSpanSec(live.duration);
+          if (
+            fg &&
+            activePhrase &&
+            shiftDragShouldCreateFocusInsideActivePhrase(
+              activePhrase,
+              fg[0],
+              fg[1],
+            ) &&
+            fg[1] - fg[0] >= minPhraseOrSegmentSpanSec(phraseDur) - 1e-9
           ) {
-            ctx.onPhraseBandDragCreate(ghost[0], ghost[1]);
-          }
-          return;
-        }
-
-        if (g.mode === "draftFocus") {
-          if (!(live.duration > 0)) return;
-          if (!g.moved) {
-            onSeek(secTap);
+            ctx.onShiftFocusDragCreate(activePhrase.id, fg[0], fg[1]);
             return;
           }
-          const ghost = ghostFocusDraft;
-          const ph = live.loops.find((l) => l.id === g.phraseId);
-          if (
-            ghost &&
-            ph &&
-            ctx.enabled &&
-            ghost[1] - ghost[0] >= minPhraseOrSegmentSpanSec(ph.end - ph.start) - 1e-9
-          ) {
-            ctx.onFocusBandDragCreate(g.phraseId, ghost[0], ghost[1]);
+          if (pg && pg[1] - pg[0] >= minDur - 1e-9) {
+            ctx.onShiftPhraseDragCreate(pg[0], pg[1]);
           }
           return;
         }
 
-        if (ctx.enabled && ctx.interactionMode === "edit") {
+        if (ctx.enabled) {
           if (g.mode === "phraseMove") {
             if (!g.moved) {
               ctx.onSelectPhrase(g.id);
@@ -609,115 +691,79 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       const el = scrollRef.current;
       if (!el || !(duration > 0)) return;
 
+      const inRegion = (event.target as HTMLElement)?.closest?.(
+        "[data-neutral-timeline-region]",
+      );
+
+      /** Region hits never start scrub-level pan/shift gestures (desktop matches region priority). */
+      if (inRegion) return;
+
       const band = bandAt(event);
+      if (band === "outside") return;
 
-      const panChosen =
-        !authOn || (auth?.interactionMode ?? "pan") === "pan";
-
-      /** Pan timeline (classic) — also when authoring off */
-      if (panChosen) {
+      /** Shift+drag matches desktop store gating when unlock maps are present. */
+      if (shiftAuthoringAllowed && auth && event.shiftKey) {
         gestureRef.current = {
-          mode: "pan",
+          mode: "draftShift",
           pid: event.pointerId,
+          aSec: secsFromClient(event.clientX),
           ax: event.clientX,
-          sl: el.scrollLeft,
           moved: false,
         };
+        ghostPhraseRef.current = null;
+        ghostFocusRef.current = null;
         try {
           el.setPointerCapture(event.pointerId);
         } catch {
           /* ignore */
         }
-        bindGestureHooks(gestureRef.current, auth ?? NOOP_AUTHORING_CTX);
+        bindGestureHooks(gestureRef.current, auth);
         return;
       }
 
-      const a = auth;
-      if (!a) return;
-
-      /** Edit — backdrop draft only (regions stopPropagation). */
-      if (!(event.target as HTMLElement)?.closest?.("[data-neutral-timeline-region]")) {
-        if (band === "ruler" || band === "outside") return;
-        const sec0 = secsFromClient(event.clientX);
-        if (band === "phrase" && a.editTool === "section") {
-          if (frontmostPhraseAtTime(loops, sec0)) return;
-          gestureRef.current = {
-            mode: "draftPhrase",
-            pid: event.pointerId,
-            aSec: sec0,
-            ax: event.clientX,
-            moved: false,
-          };
-          ghostPhraseRef.current = null;
-          try {
-            el.setPointerCapture(event.pointerId);
-          } catch {
-            /* ignore */
-          }
-          bindGestureHooks(gestureRef.current, a);
-          return;
-        }
-        if (band === "focus" && a.editTool === "focus") {
-          const phraseId = a.activePhraseId;
-          if (!phraseId) return;
-          const phrase = loops.find((l) => l.id === phraseId);
-          if (!(phrase && sec0 >= phrase.start && sec0 <= phrase.end)) return;
-          gestureRef.current = {
-            mode: "draftFocus",
-            pid: event.pointerId,
-            phraseId,
-            aSec: sec0,
-            ax: event.clientX,
-            moved: false,
-          };
-          try {
-            el.setPointerCapture(event.pointerId);
-          } catch {
-            /* ignore */
-          }
-          bindGestureHooks(gestureRef.current, a);
-          return;
-        }
+      gestureRef.current = {
+        mode: "pan",
+        pid: event.pointerId,
+        ax: event.clientX,
+        sl: el.scrollLeft,
+        moved: false,
+      };
+      try {
+        el.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
       }
+      bindGestureHooks(gestureRef.current, auth ?? NOOP_AUTHORING_CTX);
     },
-    [auth, authOn, bandAt, bindGestureHooks, duration, loops, rulerIgnored, secsFromClient],
+    [
+      auth,
+      shiftAuthoringAllowed,
+      bandAt,
+      bindGestureHooks,
+      duration,
+      rulerIgnored,
+      secsFromClient,
+    ],
   );
 
-  void ghostNonce;
+  /** Overlay shell: selects phrases / consumes hits above the faux waveform. Structural edits use per-loop gates. */
+  const phraseOverlayActive = Boolean(auth && authOn);
 
-  const phraseStripPx = TRACK_BAND_PX * PHRASE_BAND_END_FRAC_OF_TRACK;
-  const focusStripPx = TRACK_BAND_PX - phraseStripPx;
-
-  const phraseEditActive = Boolean(
-    auth &&
-      authOn &&
-      auth.interactionMode === "edit" &&
-      auth.editTool === "section",
-  );
-  const focusEditActive = Boolean(
-    auth &&
-      authOn &&
-      auth.interactionMode === "edit" &&
-      auth.editTool === "focus",
-  );
-
-  /** Focus tool: tapping the phrase ribbon activates the phrase for bottom-band authoring. */
-  const onPhraseBackdropPointerDown = useCallback(
+  /** Practice Section backdrop — absorbs stray hits; body/handles own dragging. */
+  const onPhraseStripPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>, loop: PracticeLoop) => {
-      if (!auth || !authOn || auth.interactionMode !== "edit" || event.button !== 0)
-        return;
+      if (!phraseOverlayActive || !auth || event.button !== 0) return;
       if (loop.end <= loop.start) return;
       event.stopPropagation();
-      if (auth.editTool === "focus") {
-        auth.onSelectPhrase(loop.id);
-      }
+      auth.onSelectPhrase(loop.id);
     },
-    [auth, authOn],
+    [auth, phraseOverlayActive],
   );
 
   const phraseBodyMoveDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>, loop: PracticeLoop) => {
-      if (!auth || !phraseEditActive || event.button !== 0) return;
+      if (!auth || !phraseOverlayActive || event.button !== 0) return;
+      if (!phraseBoundaryEditable(loop.id)) return;
       if (loop.end <= loop.start) return;
       event.stopPropagation();
       auth.onSelectPhrase(loop.id);
@@ -739,7 +785,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       }
       bindGestureHooks(gestureRef.current, auth);
     },
-    [auth, phraseEditActive, bindGestureHooks],
+    [auth, phraseBoundaryEditable, phraseOverlayActive, bindGestureHooks],
   );
 
   const phraseEdgeResizeDown = useCallback(
@@ -748,7 +794,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       loop: PracticeLoop,
       edge: "start" | "end",
     ) => {
-      if (!auth || !phraseEditActive || event.button !== 0) return;
+      if (!auth || !phraseOverlayActive || event.button !== 0) return;
+      if (!phraseBoundaryEditable(loop.id)) return;
       if (loop.end <= loop.start) return;
       event.stopPropagation();
       auth.onSelectPhrase(loop.id);
@@ -771,7 +818,20 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       }
       bindGestureHooks(gestureRef.current, auth);
     },
-    [auth, phraseEditActive, bindGestureHooks],
+    [auth, phraseBoundaryEditable, phraseOverlayActive, bindGestureHooks],
+  );
+
+  const segmentSelectPointerDown = useCallback(
+    (
+      event: ReactPointerEvent<HTMLElement>,
+      loop: PracticeLoop,
+      segment: PhraseSegment,
+    ) => {
+      if (!phraseOverlayActive || !auth || event.button !== 0) return;
+      event.stopPropagation();
+      auth.onSelectFocus(loop.id, segment.id);
+    },
+    [auth, phraseOverlayActive],
   );
 
   const segmentBodyMoveDown = useCallback(
@@ -780,7 +840,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       loop: PracticeLoop,
       segment: PhraseSegment,
     ) => {
-      if (!auth || !focusEditActive || event.button !== 0) return;
+      if (!auth || !phraseOverlayActive || event.button !== 0) return;
+      if (!focusSegmentBoundaryEditable(segment.id)) return;
       event.stopPropagation();
       auth.onSelectFocus(loop.id, segment.id);
       const el = scrollRef.current;
@@ -804,7 +865,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       }
       bindGestureHooks(gestureRef.current, auth);
     },
-    [auth, focusEditActive, bindGestureHooks],
+    [
+      auth,
+      focusSegmentBoundaryEditable,
+      phraseOverlayActive,
+      bindGestureHooks,
+    ],
   );
 
   const segmentEdgeResizeDown = useCallback(
@@ -814,7 +880,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       segment: PhraseSegment,
       edge: "start" | "end",
     ) => {
-      if (!auth || !focusEditActive || event.button !== 0) return;
+      if (!auth || !phraseOverlayActive || event.button !== 0) return;
+      if (!focusSegmentBoundaryEditable(segment.id)) return;
       event.stopPropagation();
       auth.onSelectFocus(loop.id, segment.id);
       const el = scrollRef.current;
@@ -838,101 +905,30 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       }
       bindGestureHooks(gestureRef.current, auth);
     },
-    [auth, focusEditActive, bindGestureHooks],
+    [
+      auth,
+      focusSegmentBoundaryEditable,
+      phraseOverlayActive,
+      bindGestureHooks,
+    ],
   );
+
+  void ghostNonce;
 
   const phraseGhostDraft = ghostPhraseRef.current;
   const focusGhostDraft = ghostFocusRef.current;
 
   const regionPointerShell =
-    authOn && auth?.interactionMode === "edit"
-      ? "pointer-events-auto"
-      : "pointer-events-none";
+    authOn && auth?.enabled ? "pointer-events-auto" : "pointer-events-none";
 
   return (
     <div
       ref={hostRef}
-      className="flex flex-col overflow-hidden border-b border-stone-900/85 bg-[#070605]"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-b border-stone-900/85 bg-[#070605]"
     >
-      {auth?.enabled ? (
-        <div className="flex flex-wrap items-center gap-2 border-b border-stone-800/65 bg-[#080605]/90 px-3 py-1.5 text-[11px] text-stone-300">
-          <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-stone-500">
-            Synthetic timeline
-          </span>
-          <div className="ml-auto flex items-center gap-2">
-            <div
-              className="flex rounded-md border border-stone-800/85 bg-black/55 p-0.5 shadow-inner shadow-black/30"
-              role="group"
-              aria-label="Scroll vs edit timeline"
-            >
-              <button
-                type="button"
-                className={cn(
-                  "rounded-[5px] px-2 py-1 font-medium outline-none ring-violet-500/35 transition focus-visible:ring-2",
-                  auth.interactionMode === "pan"
-                    ? "bg-stone-800/95 text-white"
-                    : "text-stone-500 hover:text-stone-300",
-                )}
-                aria-pressed={auth.interactionMode === "pan"}
-                onClick={() => auth.onInteractionModeChange("pan")}
-              >
-                Pan
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "rounded-[5px] px-2 py-1 font-medium outline-none ring-violet-500/35 transition focus-visible:ring-2",
-                  auth.interactionMode === "edit"
-                    ? "bg-stone-800/95 text-white"
-                    : "text-stone-500 hover:text-stone-300",
-                )}
-                aria-pressed={auth.interactionMode === "edit"}
-                onClick={() => auth.onInteractionModeChange("edit")}
-              >
-                Edit
-              </button>
-            </div>
-            {auth.interactionMode === "edit" ? (
-              <div
-                className="flex rounded-md border border-stone-800/85 bg-black/55 p-0.5 shadow-inner shadow-black/30"
-                role="group"
-                aria-label="Practice Section vs Focus Loop authoring tool"
-              >
-                <button
-                  type="button"
-                  className={cn(
-                    "rounded-[5px] px-2 py-1 font-medium outline-none ring-violet-500/35 transition focus-visible:ring-2",
-                    auth.editTool === "section"
-                      ? "bg-violet-900/90 text-white"
-                      : "text-stone-500 hover:text-stone-300",
-                  )}
-                  aria-pressed={auth.editTool === "section"}
-                  onClick={() => auth.onEditToolChange("section")}
-                >
-                  Section
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "rounded-[5px] px-2 py-1 font-medium outline-none ring-violet-500/35 transition focus-visible:ring-2",
-                    auth.editTool === "focus"
-                      ? "bg-emerald-950/95 text-emerald-100"
-                      : "text-stone-500 hover:text-stone-300",
-                  )}
-                  aria-pressed={auth.editTool === "focus"}
-                  onClick={() => auth.onEditToolChange("focus")}
-                >
-                  Focus
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       <div
         ref={scrollRef}
-        className="neutral-timeline-scrollbar relative overflow-x-auto overflow-y-hidden px-3 py-3"
+        className="neutral-timeline-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden px-2 py-2 sm:px-3 sm:py-3"
       >
         <div
           ref={scrubRef}
@@ -988,7 +984,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                   >
                     <span className="block h-[7px] w-px rounded-full bg-stone-700/95" />
                     {showMajor ? (
-                      <span className="-translate-x-1/2 whitespace-nowrap pl-px font-mono text-[9px] text-stone-600">
+                      <span className="-translate-x-1/2 whitespace-nowrap pl-px font-mono text-[10px] text-stone-500">
                         {fmtRuler(t)}
                       </span>
                     ) : null}
@@ -1000,9 +996,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
           <div
             className="relative isolate overflow-visible"
-            style={{ height: TRACK_BAND_PX }}
+            style={{ height: trackBandPx }}
           >
-            <SyntheticWaveBedCanvas widthPx={scrollWidthPx} heightPx={TRACK_BAND_PX} />
+            <SyntheticWaveBedCanvas widthPx={scrollWidthPx} heightPx={trackBandPx} />
 
             <div className="pointer-events-none absolute inset-x-0 top-2 h-px bg-stone-800/65" />
 
@@ -1042,7 +1038,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
               <div
                 className="pointer-events-none absolute z-[22] top-0 w-[1.5px] -translate-x-1/2 rounded-full bg-amber-400/98 shadow-[0_0_14px_rgba(251,191,36,0.45)]"
                 style={{
-                  height: TRACK_BAND_PX,
+                  height: trackBandPx,
                   left: secondsToContentPx(Math.min(duration, Math.max(currentTime, 0)), pxPerSec),
                 }}
               />
@@ -1068,9 +1064,10 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                           : "border-violet-500/[0.32] bg-violet-950/[0.08]",
                       )}
                       style={{ left: pxL, width: w, height: phraseStripPx - 8 }}
-                      onPointerDown={(e) => onPhraseBackdropPointerDown(e, loop)}
+                      onPointerDown={(e) => onPhraseStripPointerDown(e, loop)}
                     >
-                      {phraseEditActive ? (
+                      {phraseOverlayActive &&
+                      phraseBoundaryEditable(loop.id) ? (
                         <>
                           <div
                             aria-label="Practice Section start boundary"
@@ -1093,9 +1090,13 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                             onPointerDown={(e) => phraseEdgeResizeDown(e, loop, "end")}
                           />
                         </>
-                      ) : focusEditActive ? (
-                        <div className="absolute inset-2 rounded-[3px]" />
-                      ) : null}
+                      ) : (
+                        <div className="pointer-events-none absolute inset-2 flex items-center">
+                          <span className="line-clamp-1 text-[10px] font-medium text-white/80">
+                            {loop.name.trim() || "Practice Section"}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1116,9 +1117,14 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                     const sw = Math.max(3, pxR - pxL);
                     const activeSeg = segment.id === activeSegmentId;
 
+                    const focusEditable =
+                      phraseOverlayActive &&
+                      focusSegmentBoundaryEditable(segment.id);
                     const segHitClass = cn(
                       "absolute rounded-sm border backdrop-blur-[1px] transition-colors",
-                      focusEditActive ? regionPointerShell : "pointer-events-none opacity-70",
+                      phraseOverlayActive
+                        ? "pointer-events-auto"
+                        : "pointer-events-none opacity-70",
                       activeSeg
                         ? "border-emerald-400/80 bg-emerald-500/[0.16]"
                         : "border-emerald-600/42 bg-emerald-950/[0.10]",
@@ -1136,7 +1142,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                           height: Math.max(10, focusStripPx - 10),
                         }}
                       >
-                        {focusEditActive ? (
+                        {focusEditable ? (
                           <>
                             <div
                               aria-label={`Focus Loop ${segment.name} start`}
@@ -1161,6 +1167,17 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                               }
                             />
                           </>
+                        ) : phraseOverlayActive ? (
+                          <button
+                            type="button"
+                            aria-label={`Select Focus Loop ${segment.name}`}
+                            className="absolute inset-1 z-[2] cursor-default rounded-sm bg-transparent px-2 pt-px text-left text-[9px] font-medium text-emerald-50/95 hover:bg-black/14"
+                            onPointerDown={(e) =>
+                              segmentSelectPointerDown(e, loop, segment)
+                            }
+                          >
+                            {segment.name.trim() || "Focus Loop"}
+                          </button>
                         ) : null}
                       </div>
                     );
