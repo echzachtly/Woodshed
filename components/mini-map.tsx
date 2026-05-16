@@ -179,7 +179,7 @@ export const MiniMap = memo(function MiniMap(props: Props) {
           {readOnly
             ? "Read-only preview"
             : onFitAll
-              ? "Click to seek · drag to pan · double-click to fit all"
+              ? "Click to seek · drag to scrub · drag to edge to pan"
               : "Click to seek · drag the window to pan"}
         </span>
       </div>

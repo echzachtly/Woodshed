@@ -81,7 +81,6 @@ import { resolveTimelinePlaybackIntent } from "@/lib/interaction/timeline-playba
 import {
   canEnterPracticeEditMode,
   resolvePracticeEditCompatibility,
-  resolvePracticeEditExitCleanup,
 } from "@/lib/interaction/practice-edit-mode";
 import { deriveRegionVisualState } from "@/lib/regions/region-visual-state";
 import {
@@ -106,10 +105,14 @@ import {
 import { parseYoutubePasteForMediaSource } from "@/lib/youtube/youtube-import";
 import { NEUTRAL_TIMELINE_PROTOTYPE_ENABLED } from "@/components/neutral-timeline/constants";
 import { NeutralTimelinePrototype } from "@/components/neutral-timeline/neutral-timeline-prototype";
+import { TimeRuler } from "@/components/timeline/time-ruler";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import {
   enterFocusLoopStructuralEdit,
   enterPracticeSectionStructuralEdit,
+  exitPracticeEditModeToPractice,
+  toggleFocusLoopStructuralEdit,
+  togglePracticeSectionStructuralEdit,
 } from "@/lib/woodshed-enter-region-edit";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
@@ -151,6 +154,8 @@ import { installShiftWaveformAuthoringGesture } from "@/lib/shift-waveform-autho
 import {
   PLAYHEAD_UI_TIME_MS,
   readPlaybackSeconds,
+  resolveFixedPlayheadViewportLock,
+  waveformViewportPlayheadX,
 } from "@/lib/playhead-sync";
 import { useShallow } from "zustand/react/shallow";
 
@@ -174,6 +179,125 @@ const ALLOWED_AUDIO_EXTENSIONS = new Set([
   "aiff",
   "aif",
 ]);
+
+const DEV_TIMELINE_DIAGNOSTICS_LOCAL_FLAG = false;
+
+const DEV_TIMELINE_DIAGNOSTICS = {
+  enabled:
+    process.env.NODE_ENV === "development" &&
+    DEV_TIMELINE_DIAGNOSTICS_LOCAL_FLAG,
+  overlay: false,
+  logFrames: false,
+  logWarnings: true,
+  logEveryNFrames: 20,
+  overlayThrottleMs: 120,
+  warningThrottleMs: 2200,
+} as const;
+
+const UPLOADED_AUDIO_TOP_RULER_ENABLED = false;
+
+type TimelineDiagnosticsOverlay = {
+  rafDeltaMs: number;
+  playbackSeconds: number;
+  desiredScrollLeft: number | null;
+  actualScrollLeft: number;
+  visualTranslateX: number;
+  waveformTransformPx: number;
+  rulerTransformPx: number;
+  rebaseCount: number;
+  rebaseTimestampMs: number | null;
+  scrollLeftWriteCount: number;
+  scrollEventCount: number;
+  viewportMetricUpdateCount: number;
+  timelineRenderCount: number;
+  rulerRenderCount: number;
+  waveSurferScrollEventsDuringPlayback: number;
+  waveSurferInteractionEventsDuringPlayback: number;
+  transformMismatchFrames: number;
+  roundedTransformFrames: number;
+};
+
+type TimelineDiagnosticsRuntime = TimelineDiagnosticsOverlay & {
+  frameCount: number;
+  lastRafTsMs: number;
+  lastWarningAtMsByKey: Record<string, number>;
+  approvedScrollWriteUntilMs: number;
+  lastObservedScrollLeft: number;
+  lastOverlayPushMs: number;
+  warnedTransformTransition: boolean;
+  warnedFrequentRebase: boolean;
+};
+
+function parseTranslateXPx(transformValue: string | null | undefined): number {
+  if (!transformValue) return 0;
+  const match = /translate3d\(([-0-9.]+)px,\s*[-0-9.]+px,\s*[-0-9.]+px\)/.exec(
+    transformValue,
+  );
+  if (match) return Number.parseFloat(match[1] ?? "0") || 0;
+  const match2d = /translateX\(([-0-9.]+)px\)/.exec(transformValue);
+  if (match2d) return Number.parseFloat(match2d[1] ?? "0") || 0;
+  return 0;
+}
+
+function parseDurationTokenMs(token: string): number {
+  const trimmed = token.trim().toLowerCase();
+  if (!trimmed) return 0;
+  if (trimmed.endsWith("ms")) {
+    const n = Number.parseFloat(trimmed.slice(0, -2));
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  }
+  if (trimmed.endsWith("s")) {
+    const n = Number.parseFloat(trimmed.slice(0, -1));
+    return Number.isFinite(n) ? Math.max(0, n * 1000) : 0;
+  }
+  const n = Number.parseFloat(trimmed);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+function hasActiveTransformTransition(el: HTMLElement | null): boolean {
+  if (!el || typeof window === "undefined") return false;
+  const style = window.getComputedStyle(el);
+  const props = style.transitionProperty.split(",").map((p) => p.trim().toLowerCase());
+  const durations = style.transitionDuration
+    .split(",")
+    .map((v) => parseDurationTokenMs(v));
+  return props.some((prop, ix) => {
+    if (!(prop === "transform" || prop === "all")) return false;
+    const dur = durations[Math.min(ix, durations.length - 1)] ?? 0;
+    return dur > 0;
+  });
+}
+
+function createTimelineDiagnosticsRuntime(): TimelineDiagnosticsRuntime {
+  return {
+    rafDeltaMs: 0,
+    playbackSeconds: 0,
+    desiredScrollLeft: null,
+    actualScrollLeft: 0,
+    visualTranslateX: 0,
+    waveformTransformPx: 0,
+    rulerTransformPx: 0,
+    rebaseCount: 0,
+    rebaseTimestampMs: null,
+    scrollLeftWriteCount: 0,
+    scrollEventCount: 0,
+    viewportMetricUpdateCount: 0,
+    timelineRenderCount: 0,
+    rulerRenderCount: 0,
+    waveSurferScrollEventsDuringPlayback: 0,
+    waveSurferInteractionEventsDuringPlayback: 0,
+    transformMismatchFrames: 0,
+    roundedTransformFrames: 0,
+    frameCount: 0,
+    lastRafTsMs: 0,
+    lastWarningAtMsByKey: {},
+    approvedScrollWriteUntilMs: 0,
+    lastObservedScrollLeft: 0,
+    lastOverlayPushMs: 0,
+    warnedTransformTransition: false,
+    warnedFrequentRebase: false,
+  };
+}
 
 /** Accept after pick: real `audio/*` MIME, known extension, or empty/unexpected type with known extension. */
 function isAllowedUploadedAudioFile(file: File): boolean {
@@ -285,6 +409,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   );
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const waveformRulerMotionRef = useRef<HTMLDivElement | null>(null);
+  const waveformVisualPlayheadRef = useRef<HTMLDivElement | null>(null);
   /** Desktop: waveform column (flex child) — ResizeObserver reflows WaveSurfer when height changes. */
   const desktopWaveformColumnRef = useRef<HTMLDivElement | null>(null);
   const desktopSplitRef = useRef<HTMLDivElement | null>(null);
@@ -302,8 +428,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const wheelBound = useRef(false);
   /** Ignore scroll events briefly after programmatic phrase-fit (avoids fighting `phrase-focus`). */
   const suppressViewportScrollUntilRef = useRef(0);
+  /** Playback-follow writes to `scrollLeft`; ignore those in "user scrolled" handlers. */
+  const programmaticWaveScrollUntilRef = useRef(0);
   /** Stops tight loop RAF from the effect cleanup (see mount IIFE). */
   const cancelPlaybackLoopRef = useRef<(() => void) | null>(null);
+  const flushWavePlaybackVisualOffsetRef = useRef<
+    ((mode?: "keep-view" | "reset") => void) | null
+  >(null);
+  const suspendWavePlaybackVisualFollowUntilRef = useRef(0);
   /** Releases the click-drag pan gesture listeners from the effect cleanup. */
   const releasePanRef = useRef<(() => void) | null>(null);
   /** Desktop Shift+drag phrase / focus authoring. */
@@ -312,6 +444,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const releaseWaveClickIntentRef = useRef<(() => void) | null>(null);
   /** Desktop region-only double-click adapter: existing phrase/focus -> edit entry. */
   const releaseWaveRegionDblClickRef = useRef<(() => void) | null>(null);
+  /** Uploaded-audio visual playhead RAF cleanup (renderer-aligned overlay). */
+  const releaseWaveVisualPlayheadRef = useRef<(() => void) | null>(null);
+  /** Flushes transform-follow offset before pointer/wheel interactions that use scroll math. */
+  const releaseWaveInteractionPrepRef = useRef<(() => void) | null>(null);
   /** WaveSurfer mount effect reads this ref — keep in sync with `isMobilePractice`. */
   const mobilePracticeModeRef = useRef(false);
 
@@ -322,6 +458,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const youtubeWorkspaceRef = useRef<YoutubeWorkspaceHandle | null>(null);
   const regionsRef = useRef<RegionsHandle | null>(null);
   const phraseHandleDiagCleanupRef = useRef<(() => void) | null>(null);
+  const timelineRenderCountRef = useRef(0);
+  const timelineRulerRenderCountRef = useRef(0);
+  const timelineDiagnosticsRef = useRef<TimelineDiagnosticsRuntime>(
+    createTimelineDiagnosticsRuntime(),
+  );
 
   const [projects, setProjectsList] = useState<StoredProjectMeta[]>([]);
   /** First Dexie listing finished (empty list ≠ still loading). */
@@ -337,6 +478,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     startRatio: 0,
     durationRatio: 1,
   });
+  const [waveScrollMetrics, setWaveScrollMetrics] = useState({
+    scrollLeft: 0,
+    clientWidth: 1,
+    scrollWidth: 1,
+  });
+  const renderedWaveScrollMetricsRef = useRef(waveScrollMetrics);
+  useEffect(() => {
+    renderedWaveScrollMetricsRef.current = waveScrollMetrics;
+  }, [waveScrollMetrics]);
   /** True while an audio timeline load is expected before decode clears it (covers `duration === 0` gap during `ws.load`). */
   const [audioTimelineLoading, setAudioTimelineLoading] = useState(false);
   /** Increment so header / mobile sheets open the Projects picker for empty workspace CTA. */
@@ -355,6 +505,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   /** Object URL for ingest when WaveSurfer is not mounted yet (e.g. leaving YouTube). */
   const pendingWaveSurferObjectUrlRef = useRef<string | null>(null);
   const [waveSurferEpoch, setWaveSurferEpoch] = useState(0);
+  const [timelineDiagnosticsOverlay, setTimelineDiagnosticsOverlay] =
+    useState<TimelineDiagnosticsOverlay | null>(null);
   const hydrateProjectFnRef = useRef<
     (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => Promise<void>
   >(() => Promise.resolve());
@@ -400,6 +552,22 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   );
   const youtubeShellActive =
     YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED && mediaSourceKind === "youtube";
+  const timelineDiagnosticsEnabled =
+    DEV_TIMELINE_DIAGNOSTICS.enabled && !youtubeShellActive;
+  if (timelineDiagnosticsEnabled) {
+    timelineRenderCountRef.current += 1;
+    timelineDiagnosticsRef.current.timelineRenderCount =
+      timelineRenderCountRef.current;
+  }
+  useEffect(() => {
+    if (!timelineDiagnosticsEnabled) {
+      setTimelineDiagnosticsOverlay(null);
+      return;
+    }
+    timelineRenderCountRef.current = 0;
+    timelineRulerRenderCountRef.current = 0;
+    timelineDiagnosticsRef.current = createTimelineDiagnosticsRuntime();
+  }, [timelineDiagnosticsEnabled, waveSurferEpoch]);
 
   /**
    * Central playback facade for Phase 1 (YouTube prep): transport, seeks, loop-clock reads,
@@ -412,7 +580,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     }
     const ws = wavesurferRef.current;
     return ws ? createWaveSurferPlaybackSurface(ws) : null;
-  }, [youtubeShellActive]);
+  }, [timelineDiagnosticsEnabled, youtubeShellActive]);
 
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === activeLoopId),
@@ -423,6 +591,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     () => Boolean(activeLoop?.segments?.length),
     [activeLoop?.segments],
   );
+  const uploadedRulerContentWidthPx = useMemo(
+    () =>
+      Math.max(
+        1,
+        Math.ceil(duration * minPxPerSec + WAVEFORM_HORIZONTAL_GUTTER_PX * 2),
+      ),
+    [duration, minPxPerSec],
+  );
 
   const regionContextActive = useMemo(
     () =>
@@ -431,6 +607,19 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           activeLoop?.segments?.some((s) => s.id === activeSegmentId),
       ),
     [activeSegmentId, activeLoop?.segments],
+  );
+  const desktopStructuralEditActive = useMemo(
+    () =>
+      resolvePracticeEditCompatibility({
+        editableLoopId,
+        phraseWaveformEditUnlockedById,
+        focusRegionWaveformEditUnlockedById,
+      }).editMode,
+    [
+      editableLoopId,
+      focusRegionWaveformEditUnlockedById,
+      phraseWaveformEditUnlockedById,
+    ],
   );
 
   const isDemoProject = projectId === DEMO_PROJECT_ID;
@@ -981,8 +1170,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       typeof window === "undefined"
         ? 50
         : useWoodshedStore.getState().minPxPerSec;
-    const storeForWsInit = useWoodshedStore.getState();
-    const initialAutoScroll = !storeForWsInit.loopPlaybackEnabled;
 
     void (async () => {
       const host = initialHost;
@@ -1006,11 +1193,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         container: host,
         /** `auto` lets the waveform fill the (much taller) flex container — see layout below. */
         height: "auto",
-        cursorColor: "transparent",
-        cursorWidth: 0,
-        /** Slightly brighter wave so peaks remain legible underneath the loop overlay (the waveform is the hero). */
-        waveColor: "#403a35",
-        progressColor: "#e0d2ff",
+        cursorColor: "rgba(251, 191, 36, 0.96)",
+        cursorWidth: 2,
+        /** Keep dark cinematic base, but increase precision-read playback contrast. */
+        waveColor: "rgba(156, 148, 194, 0.58)",
+        progressColor: "rgba(244, 238, 255, 0.92)",
         barWidth: 1,
         barGap: 0,
         normalize: true,
@@ -1020,13 +1207,16 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         fillParent: false,
         minPxPerSec: starterZoom,
         /**
-         * Drag is reserved for click-drag panning of the waveform viewport (see pan handler below).
-         * Click still seeks via WaveSurfer's internal interaction; this only disables drag-to-seek
-         * so panning and editing gestures don't fight the playhead.
+         * Disable WaveSurfer native drag-to-seek; workspace installs unified drag scrub
+         * with edge auto-pan so gesture priority remains deterministic with region/shift paths.
          */
         dragToSeek: false,
-        autoScroll: initialAutoScroll,
-        autoCenter: initialAutoScroll,
+        /**
+         * Woodshed owns playback-follow scrolling (fixed center playhead + moving timeline).
+         * Disable WaveSurfer auto-follow so there is a single scroll authority.
+         */
+        autoScroll: false,
+        autoCenter: false,
       });
 
       const regionsCtor = Factory as {
@@ -1088,6 +1278,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         if (!dom?.wrapper) return;
         dom.wrapper.style.marginLeft = `${WAVEFORM_HORIZONTAL_GUTTER_PX}px`;
         dom.wrapper.style.marginRight = `${WAVEFORM_HORIZONTAL_GUTTER_PX}px`;
+        dom.wrapper.style.background = "transparent";
+        dom.wrapper.style.borderRadius = "12px";
+        dom.wrapper.style.willChange = "transform";
+        dom.wrapper.style.boxShadow =
+          "inset 0 -12px 24px -20px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.03)";
+        dom.scrollContainer.style.background = "transparent";
+        const root = dom.wrapper.getRootNode();
+        if (root instanceof ShadowRoot && root.host instanceof HTMLElement) {
+          root.host.setAttribute("data-ws-shadow-host", "true");
+          root.host.setAttribute("data-ws-visual-playhead-overlay", "true");
+        }
       };
       applyWaveformGutterMargins();
 
@@ -1096,35 +1297,487 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
        * so hot paths don't allocate fresh `{ seek, play, … }` closures every tick.
        */
       const wsPlaybackSurface = createWaveSurferPlaybackSurface(ws);
+      const visualPlayheadEl = waveformVisualPlayheadRef.current;
+      const timelineDiag = timelineDiagnosticsRef.current;
+      const warnTimelineDiagnostic = (
+        key: string,
+        message: string,
+        details?: Record<string, unknown>,
+      ) => {
+        if (!timelineDiagnosticsEnabled || !DEV_TIMELINE_DIAGNOSTICS.logWarnings) return;
+        const nowMs = performance.now();
+        const lastAt = timelineDiag.lastWarningAtMsByKey[key] ?? 0;
+        if (nowMs - lastAt < DEV_TIMELINE_DIAGNOSTICS.warningThrottleMs) return;
+        timelineDiag.lastWarningAtMsByKey[key] = nowMs;
+        devWarn(`[timeline-diag] ${message}`, details ?? {});
+      };
+      const writeScrollLeft = (
+        el: HTMLElement,
+        nextScrollLeft: number,
+        reason: "playback-rebase" | "flush-keep-view" | "other",
+      ) => {
+        const nowMs = performance.now();
+        const next = Number.isFinite(nextScrollLeft) ? nextScrollLeft : el.scrollLeft;
+        const approved =
+          reason === "playback-rebase" || reason === "flush-keep-view";
+        if (timelineDiagnosticsEnabled) {
+          timelineDiag.scrollLeftWriteCount += 1;
+          if (approved) {
+            timelineDiag.approvedScrollWriteUntilMs = nowMs + 140;
+          } else if (wsPlaybackSurface.isPlaying()) {
+            warnTimelineDiagnostic(
+              "scroll-write-unapproved",
+              "scrollLeft write during playback outside approved rebase/flush path",
+              { reason, nextScrollLeft: next, actualScrollLeft: el.scrollLeft },
+            );
+          }
+          if (reason === "playback-rebase") {
+            const prevTs = timelineDiag.rebaseTimestampMs;
+            timelineDiag.rebaseCount += 1;
+            timelineDiag.rebaseTimestampMs = nowMs;
+            if (
+              prevTs != null &&
+              nowMs - prevTs < 2400 &&
+              !timelineDiag.warnedFrequentRebase
+            ) {
+              timelineDiag.warnedFrequentRebase = true;
+              warnTimelineDiagnostic(
+                "rebase-too-frequent",
+                "playback rebases are happening more than once every few seconds",
+                {
+                  deltaMsSincePreviousRebase: nowMs - prevTs,
+                  rebaseCount: timelineDiag.rebaseCount,
+                },
+              );
+            }
+          }
+        }
+        programmaticWaveScrollUntilRef.current = nowMs + 72;
+        el.scrollLeft = next;
+        if (approved) {
+          const nextClientWidth = el.clientWidth || 1;
+          const nextScrollWidth = el.scrollWidth || 1;
+          renderedWaveScrollMetricsRef.current = {
+            scrollLeft: next,
+            clientWidth: nextClientWidth,
+            scrollWidth: nextScrollWidth,
+          };
+          setWaveScrollMetrics((prev) =>
+            prev.scrollLeft === next &&
+            prev.clientWidth === nextClientWidth &&
+            prev.scrollWidth === nextScrollWidth
+              ? prev
+              : {
+                  scrollLeft: next,
+                  clientWidth: nextClientWidth,
+                  scrollWidth: nextScrollWidth,
+                },
+          );
+        }
+      };
+      const pushTimelineDiagnosticsOverlay = () => {
+        if (!timelineDiagnosticsEnabled || !DEV_TIMELINE_DIAGNOSTICS.overlay) return;
+        const nowMs = performance.now();
+        if (
+          nowMs - timelineDiag.lastOverlayPushMs <
+          DEV_TIMELINE_DIAGNOSTICS.overlayThrottleMs
+        ) {
+          return;
+        }
+        timelineDiag.lastOverlayPushMs = nowMs;
+        setTimelineDiagnosticsOverlay({
+          rafDeltaMs: timelineDiag.rafDeltaMs,
+          playbackSeconds: timelineDiag.playbackSeconds,
+          desiredScrollLeft: timelineDiag.desiredScrollLeft,
+          actualScrollLeft: timelineDiag.actualScrollLeft,
+          visualTranslateX: timelineDiag.visualTranslateX,
+          waveformTransformPx: timelineDiag.waveformTransformPx,
+          rulerTransformPx: timelineDiag.rulerTransformPx,
+          rebaseCount: timelineDiag.rebaseCount,
+          rebaseTimestampMs: timelineDiag.rebaseTimestampMs,
+          scrollLeftWriteCount: timelineDiag.scrollLeftWriteCount,
+          scrollEventCount: timelineDiag.scrollEventCount,
+          viewportMetricUpdateCount: timelineDiag.viewportMetricUpdateCount,
+          timelineRenderCount: timelineDiag.timelineRenderCount,
+          rulerRenderCount: timelineDiag.rulerRenderCount,
+          waveSurferScrollEventsDuringPlayback:
+            timelineDiag.waveSurferScrollEventsDuringPlayback,
+          waveSurferInteractionEventsDuringPlayback:
+            timelineDiag.waveSurferInteractionEventsDuringPlayback,
+          transformMismatchFrames: timelineDiag.transformMismatchFrames,
+          roundedTransformFrames: timelineDiag.roundedTransformFrames,
+        });
+      };
+      let clockAnchorSeconds = readPlaybackSeconds(ws);
+      let clockAnchorPerfMs = performance.now();
+      let lastActualSeconds = clockAnchorSeconds;
+      let lastSamplePerfMs = clockAnchorPerfMs;
+      const readPlaybackRate = () => {
+        const media = ws.getMediaElement();
+        return media && Number.isFinite(media.playbackRate)
+          ? Math.max(0, media.playbackRate)
+          : 1;
+      };
+      const resyncVisualClock = (actualSeconds: number, nowMs: number) => {
+        clockAnchorSeconds = actualSeconds;
+        clockAnchorPerfMs = nowMs;
+        lastActualSeconds = actualSeconds;
+        lastSamplePerfMs = nowMs;
+      };
+      const resolveVisualSeconds = (hardSnap: boolean): number => {
+        const now = performance.now();
+        const dur = wsPlaybackSurface.getDuration();
+        const actual = readPlaybackSeconds(ws);
+        const rate = readPlaybackRate();
+        const estimate =
+          clockAnchorSeconds + ((now - clockAnchorPerfMs) / 1000) * rate;
+        const hardDrift = Math.abs(actual - estimate) > 0.045;
+        const jumpBack = actual < lastActualSeconds - 0.012;
+        const freshActual = Math.abs(actual - lastActualSeconds) > 0.0008;
+        if (
+          hardSnap ||
+          hardDrift ||
+          jumpBack ||
+          freshActual ||
+          now - lastSamplePerfMs > 85
+        ) {
+          resyncVisualClock(actual, now);
+        } else {
+          lastActualSeconds = actual;
+        }
+        const visual =
+          clockAnchorSeconds + ((now - clockAnchorPerfMs) / 1000) * rate;
+        if (!(dur > 0)) return 0;
+        return Math.min(dur, Math.max(0, visual));
+      };
+      const PLAYBACK_VISUAL_REBASE_DELTA_PX = 320;
+      let waveformVisualShiftPx = 0;
+      let rulerVisualShiftPx = 0;
+      const setPlaybackVisualOffsetsPx = (
+        nextWaveformShiftPx: number,
+        nextRulerShiftPx: number,
+      ) => {
+        const waveformShift =
+          Number.isFinite(nextWaveformShiftPx) &&
+          Math.abs(nextWaveformShiftPx) > 0.001
+            ? nextWaveformShiftPx
+            : 0;
+        const rulerShift =
+          Number.isFinite(nextRulerShiftPx) && Math.abs(nextRulerShiftPx) > 0.001
+            ? nextRulerShiftPx
+            : 0;
+        const waveformChanged =
+          Math.abs(waveformShift - waveformVisualShiftPx) >= 0.001;
+        const rulerChanged = Math.abs(rulerShift - rulerVisualShiftPx) >= 0.001;
+        if (!waveformChanged && !rulerChanged) return;
+        waveformVisualShiftPx = waveformShift;
+        rulerVisualShiftPx = rulerShift;
+        const dom = peekWaveSurferDom(ws);
+        if (dom?.wrapper && waveformChanged) {
+          dom.wrapper.style.transform = `translate3d(${waveformShift}px, 0, 0)`;
+        }
+        const rulerLayer = waveformRulerMotionRef.current;
+        if (rulerLayer && rulerChanged) {
+          rulerLayer.style.transform = `translate3d(${rulerShift}px, 0, 0)`;
+        }
+        if (timelineDiagnosticsEnabled) {
+          const wrapperTransformPx = parseTranslateXPx(dom?.wrapper?.style.transform);
+          const rulerTransformPx = parseTranslateXPx(rulerLayer?.style.transform);
+          timelineDiag.waveformTransformPx = wrapperTransformPx;
+          timelineDiag.rulerTransformPx = rulerTransformPx;
+          const transformDiff = Math.abs(wrapperTransformPx - rulerTransformPx);
+          if (transformDiff > 0.35) {
+            timelineDiag.transformMismatchFrames += 1;
+            if (wsPlaybackSurface.isPlaying()) {
+              warnTimelineDiagnostic(
+                "ruler-waveform-transform-mismatch",
+                "ruler transform differs from waveform transform authority",
+                {
+                  waveformTransformPx: wrapperTransformPx,
+                  rulerTransformPx,
+                  transformDiffPx: transformDiff,
+                },
+              );
+            }
+          }
+          const waveformIsWhole =
+            Math.abs(wrapperTransformPx - Math.round(wrapperTransformPx)) < 1e-6;
+          const rulerIsWhole =
+            Math.abs(rulerTransformPx - Math.round(rulerTransformPx)) < 1e-6;
+          if (
+            wsPlaybackSurface.isPlaying() &&
+            (Math.abs(wrapperTransformPx) > 0.001 || Math.abs(rulerTransformPx) > 0.001) &&
+            waveformIsWhole &&
+            rulerIsWhole
+          ) {
+            timelineDiag.roundedTransformFrames += 1;
+            if (timelineDiag.roundedTransformFrames > 22) {
+              warnTimelineDiagnostic(
+                "whole-pixel-transform",
+                "playback-follow transforms are rounded to whole pixels",
+                {
+                  waveformTransformPx: wrapperTransformPx,
+                  rulerTransformPx,
+                  roundedFrames: timelineDiag.roundedTransformFrames,
+                },
+              );
+            }
+          } else {
+            timelineDiag.roundedTransformFrames = 0;
+          }
+          if (
+            wsPlaybackSurface.isPlaying() &&
+            !timelineDiag.warnedTransformTransition &&
+            (hasActiveTransformTransition(dom?.wrapper ?? null) ||
+              hasActiveTransformTransition(rulerLayer))
+          ) {
+            timelineDiag.warnedTransformTransition = true;
+            warnTimelineDiagnostic(
+              "transform-transition-active",
+              "css transition is active on playback-follow transform",
+              {
+                waveformTransition: dom?.wrapper
+                  ? window.getComputedStyle(dom.wrapper).transition
+                  : null,
+                rulerTransition: rulerLayer
+                  ? window.getComputedStyle(rulerLayer).transition
+                  : null,
+              },
+            );
+          }
+        }
+      };
+      const flushWavePlaybackVisualOffset = (
+        mode: "keep-view" | "reset" = "keep-view",
+      ) => {
+        if (
+          Math.abs(waveformVisualShiftPx) < 0.001 &&
+          Math.abs(rulerVisualShiftPx) < 0.001
+        ) {
+          if (mode === "reset") {
+            setPlaybackVisualOffsetsPx(0, 0);
+          }
+          return;
+        }
+        const dom = peekWaveSurferDom(ws);
+        if (dom?.scrollContainer && mode === "keep-view") {
+          const sc = dom.scrollContainer;
+          const maxScroll = Math.max(0, sc.scrollWidth - sc.clientWidth);
+          const nextScroll = Math.min(
+            maxScroll,
+            Math.max(0, sc.scrollLeft - waveformVisualShiftPx),
+          );
+          if (Math.abs(nextScroll - sc.scrollLeft) > 0.01) {
+            writeScrollLeft(sc, nextScroll, "flush-keep-view");
+          }
+        }
+        setPlaybackVisualOffsetsPx(0, 0);
+      };
+      flushWavePlaybackVisualOffsetRef.current = flushWavePlaybackVisualOffset;
+      const syncVisualPlayheadNow = (hardSnap = false) => {
+        const dom = peekWaveSurferDom(ws);
+        if (!dom) {
+          if (visualPlayheadEl) visualPlayheadEl.style.opacity = "0";
+          return;
+        }
+        const st = useWoodshedStore.getState();
+        const dur = wsPlaybackSurface.getDuration();
+        if (
+          !(dur > 0) ||
+          !Number.isFinite(st.minPxPerSec) ||
+          st.minPxPerSec <= 0
+        ) {
+          flushWavePlaybackVisualOffset("reset");
+          if (visualPlayheadEl) visualPlayheadEl.style.opacity = "0";
+          return;
+        }
+        const sec = resolveVisualSeconds(hardSnap);
+        const scrollContainer = dom.scrollContainer;
+        if (timelineDiagnosticsEnabled) {
+          const nowMs = performance.now();
+          timelineDiag.frameCount += 1;
+          timelineDiag.rafDeltaMs =
+            timelineDiag.lastRafTsMs > 0 ? nowMs - timelineDiag.lastRafTsMs : 0;
+          timelineDiag.lastRafTsMs = nowMs;
+          timelineDiag.playbackSeconds = sec;
+          timelineDiag.actualScrollLeft = scrollContainer.scrollLeft;
+          timelineDiag.desiredScrollLeft = null;
+          timelineDiag.timelineRenderCount = timelineRenderCountRef.current;
+          timelineDiag.rulerRenderCount = timelineRulerRenderCountRef.current;
+        }
+        let x = waveformViewportPlayheadX({
+          seconds: sec,
+          duration: dur,
+          pxPerSec: st.minPxPerSec,
+          scrollLeft: scrollContainer.scrollLeft,
+        });
+        const followPlaybackVisually =
+          wsPlaybackSurface.isPlaying() &&
+          performance.now() >= suspendWavePlaybackVisualFollowUntilRef.current;
+        if (followPlaybackVisually) {
+          const inferredScrollWidth = Math.max(
+            scrollContainer.scrollWidth,
+            dur * st.minPxPerSec + WAVEFORM_HORIZONTAL_GUTTER_PX * 2,
+          );
+          const lock = resolveFixedPlayheadViewportLock({
+            seconds: sec,
+            duration: dur,
+            pxPerSec: st.minPxPerSec,
+            viewportWidthPx: scrollContainer.clientWidth,
+            scrollWidthPx: inferredScrollWidth,
+          });
+          const desiredScrollLeft = lock.scrollLeftPx;
+          const scrollDelta = desiredScrollLeft - scrollContainer.scrollLeft;
+          if (timelineDiagnosticsEnabled) {
+            timelineDiag.desiredScrollLeft = desiredScrollLeft;
+          }
+          if (Math.abs(scrollDelta) >= PLAYBACK_VISUAL_REBASE_DELTA_PX) {
+            writeScrollLeft(scrollContainer, desiredScrollLeft, "playback-rebase");
+          }
+          const waveformShift = scrollContainer.scrollLeft - desiredScrollLeft;
+          const rulerBaseScrollLeft =
+            renderedWaveScrollMetricsRef.current.scrollLeft;
+          const rulerShift = rulerBaseScrollLeft - desiredScrollLeft;
+          setPlaybackVisualOffsetsPx(waveformShift, rulerShift);
+          x = lock.playheadViewportXPx;
+        } else {
+          flushWavePlaybackVisualOffset("keep-view");
+        }
+        if (visualPlayheadEl) {
+          visualPlayheadEl.style.opacity = "1";
+          visualPlayheadEl.style.transform = `translate3d(${x}px, 0, 0)`;
+        }
+        if (timelineDiagnosticsEnabled) {
+          timelineDiag.visualTranslateX = x;
+          timelineDiag.actualScrollLeft = scrollContainer.scrollLeft;
+          if (
+            DEV_TIMELINE_DIAGNOSTICS.logFrames &&
+            timelineDiag.frameCount % DEV_TIMELINE_DIAGNOSTICS.logEveryNFrames === 0
+          ) {
+            devLog("[timeline-diag:frame]", {
+              frame: timelineDiag.frameCount,
+              rafDeltaMs: timelineDiag.rafDeltaMs,
+              playbackSeconds: timelineDiag.playbackSeconds,
+              desiredScrollLeft: timelineDiag.desiredScrollLeft,
+              actualScrollLeft: timelineDiag.actualScrollLeft,
+              visualTranslateX: timelineDiag.visualTranslateX,
+              waveformTransformPx: timelineDiag.waveformTransformPx,
+              rulerTransformPx: timelineDiag.rulerTransformPx,
+            });
+          }
+          pushTimelineDiagnosticsOverlay();
+        }
+      };
+      let visualRaf = 0;
+      const stopVisualRaf = () => {
+        if (visualRaf !== 0) {
+          cancelAnimationFrame(visualRaf);
+          visualRaf = 0;
+        }
+      };
+      const tickVisualPlayhead = () => {
+        if (destroyed) return;
+        syncVisualPlayheadNow();
+        if (!wsPlaybackSurface.isPlaying()) {
+          visualRaf = 0;
+          return;
+        }
+        visualRaf = requestAnimationFrame(tickVisualPlayhead);
+      };
+      const startVisualRaf = () => {
+        stopVisualRaf();
+        syncVisualPlayheadNow(true);
+        visualRaf = requestAnimationFrame(tickVisualPlayhead);
+      };
+      releaseWaveVisualPlayheadRef.current = () => {
+        stopVisualRaf();
+        flushWavePlaybackVisualOffset("keep-view");
+        if (visualPlayheadEl) {
+          visualPlayheadEl.style.opacity = "0";
+        }
+      };
+      ws.on("play", startVisualRaf);
+      ws.on("pause", () => {
+        stopVisualRaf();
+        flushWavePlaybackVisualOffset("keep-view");
+        syncVisualPlayheadNow(true);
+      });
+      ws.on("finish", () => {
+        stopVisualRaf();
+        flushWavePlaybackVisualOffset("keep-view");
+        syncVisualPlayheadNow(true);
+      });
+      ws.on("zoom", () => {
+        flushWavePlaybackVisualOffset("keep-view");
+        suspendWavePlaybackVisualFollowUntilRef.current = performance.now() + 200;
+        syncVisualPlayheadNow(true);
+      });
+      ws.on("scroll", () => {
+        if (timelineDiagnosticsEnabled && wsPlaybackSurface.isPlaying()) {
+          timelineDiag.waveSurferScrollEventsDuringPlayback += 1;
+        }
+        syncVisualPlayheadNow(true);
+      });
+      ws.on("interaction", () => {
+        if (timelineDiagnosticsEnabled && wsPlaybackSurface.isPlaying()) {
+          timelineDiag.waveSurferInteractionEventsDuringPlayback += 1;
+        }
+      });
+      ws.on("timeupdate", () => {
+        if (!wsPlaybackSurface.isPlaying()) {
+          syncVisualPlayheadNow(true);
+        }
+      });
+      syncVisualPlayheadNow(true);
 
       /**
-       * Click-drag pan on the main waveform.
-       *
-       * Why this exists:
-       *   The mini-map was carrying too much weight for everyday navigation.
-       *   Direct click-drag inside the waveform is the most tactile way to move
-       *   around while practicing.
+       * Default waveform drag gesture: scrub playhead with edge auto-pan.
        *
        * Gesture priority:
-       *   1. Phrase resize handles (inside `.woodshed-region-editing`) — regions
-       *      plugin owns resize; we bail out when the event target is inside that
-       *      wrapper (handles keep `pointer-events: auto`; the phrase fill is `none`).
-       *   2. Focus region overlay (`.woodshed-region-segment`) — click-to-select /
-       *      resize when unlocked; we never arm pan from inside the overlay.
-       *   3. Elsewhere on the waveform — pan after slop; click without drag seeks.
-       *
-       * Click-vs-pan disambiguation:
-       *   We require ~4px of movement before activating pan so single clicks
-       *   still seek via WaveSurfer's internal interaction. Once a pan starts
-       *   we set pointer capture and intercept the trailing `click` event in
-       *   the capture phase so WaveSurfer's seek doesn't fire on release.
+       *   1. Shift+drag authoring (focus/phrase creation)
+       *   2. Phrase/focus handles and region-owned interactions
+       *   3. Background click-drag scrub (single click still seeks)
        */
       const panDom = peekWaveSurferDom(ws);
       if (panDom) {
-        releasePanRef.current = installWaveformPanGesture(
-          panDom.scrollContainer,
-          () => mobilePracticeModeRef.current,
+        releaseWaveInteractionPrepRef.current?.();
+        const prepareWaveInteraction = () => {
+          flushWavePlaybackVisualOffset("keep-view");
+          suspendWavePlaybackVisualFollowUntilRef.current = performance.now() + 220;
+        };
+        panDom.scrollContainer.addEventListener(
+          "pointerdown",
+          prepareWaveInteraction,
+          { capture: true, passive: true },
         );
+        panDom.scrollContainer.addEventListener("wheel", prepareWaveInteraction, {
+          capture: true,
+          passive: true,
+        });
+        releaseWaveInteractionPrepRef.current = () => {
+          panDom.scrollContainer.removeEventListener(
+            "pointerdown",
+            prepareWaveInteraction,
+            true,
+          );
+          panDom.scrollContainer.removeEventListener(
+            "wheel",
+            prepareWaveInteraction,
+            true,
+          );
+        };
+        releasePanRef.current = installWaveformPanGesture({
+          container: panDom.scrollContainer,
+          isMobilePractice: () => mobilePracticeModeRef.current,
+          getWave: () => wavesurferRef.current,
+          getMinPxPerSec: () => useWoodshedStore.getState().minPxPerSec,
+          onScrubSeconds: (seconds) => {
+            const st = useWoodshedStore.getState();
+            st.exitPhraseFitAfterUserNavigation();
+            wsPlaybackSurface.seek(seconds);
+            st.setCurrentTime(seconds);
+          },
+        });
         releaseShiftAuthoringRef.current?.();
         /** Shift+drag authoring seeks via WaveSurfer inside the gesture helper (`getWave`); Phase 1 playback boundary is workspace-owned elsewhere. */
         releaseShiftAuthoringRef.current = installShiftWaveformAuthoringGesture({
@@ -1252,10 +1905,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         tightLoopRaf = requestAnimationFrame(loopBoundaryStep);
       }
 
-      const updateViewport = () => {
+      const updateViewport = (opts?: { force?: boolean }) => {
         const dom = peekWaveSurferDom(ws);
         const parent = dom?.scrollContainer;
         if (!dom || !parent) return;
+        const force = opts?.force === true;
+        if (!force && wsPlaybackSurface.isPlaying()) {
+          return;
+        }
         const scrollLeft = parent.scrollLeft;
         const scrollWidth = parent.scrollWidth;
         const clientWidth = parent.clientWidth || 1;
@@ -1263,18 +1920,111 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         const startRatio = usable <= 0 ? 0 : scrollLeft / usable;
         const durationRatio =
           scrollWidth <= 0 ? 1 : Math.min(1, clientWidth / scrollWidth);
-        setViewport({ startRatio, durationRatio });
+        const isPlaying = wsPlaybackSurface.isPlaying();
+        setViewport((prev) => {
+          const changed =
+            prev.startRatio !== startRatio || prev.durationRatio !== durationRatio;
+          if (timelineDiagnosticsEnabled && changed) {
+            timelineDiag.viewportMetricUpdateCount += 1;
+            if (isPlaying) {
+              warnTimelineDiagnostic(
+                "react-viewport-state-during-playback",
+                "React viewport/ruler state update occurred during playback",
+                {
+                  force,
+                  source: "viewport",
+                  scrollLeft,
+                  clientWidth,
+                  scrollWidth,
+                },
+              );
+            }
+          }
+          return changed ? { startRatio, durationRatio } : prev;
+        });
+        setWaveScrollMetrics((prev) => {
+          const changed =
+            prev.scrollLeft !== scrollLeft ||
+            prev.clientWidth !== clientWidth ||
+            prev.scrollWidth !== scrollWidth;
+          if (timelineDiagnosticsEnabled && changed) {
+            timelineDiag.viewportMetricUpdateCount += 1;
+            if (isPlaying) {
+              warnTimelineDiagnostic(
+                "react-viewport-state-during-playback",
+                "React viewport/ruler state update occurred during playback",
+                {
+                  force,
+                  source: "ruler-metrics",
+                  scrollLeft,
+                  clientWidth,
+                  scrollWidth,
+                },
+              );
+            }
+          }
+          return changed
+            ? {
+                scrollLeft,
+                clientWidth,
+                scrollWidth,
+              }
+            : prev;
+        });
       };
 
-      ws.on("scroll", updateViewport);
-      ws.on("zoom", updateViewport);
+      ws.on("scroll", () => updateViewport());
+      ws.on("zoom", () => updateViewport({ force: true }));
 
       const peekPan = peekWaveSurferDom(ws);
       if (peekPan) {
+        timelineDiag.lastObservedScrollLeft = peekPan.scrollContainer.scrollLeft;
+        const recordInteractionEvent = () => {
+          if (timelineDiagnosticsEnabled && wsPlaybackSurface.isPlaying()) {
+            timelineDiag.waveSurferInteractionEventsDuringPlayback += 1;
+          }
+        };
+        peekPan.scrollContainer.addEventListener("pointerdown", recordInteractionEvent, {
+          capture: true,
+          passive: true,
+        });
+        peekPan.scrollContainer.addEventListener("wheel", recordInteractionEvent, {
+          capture: true,
+          passive: true,
+        });
         peekPan.scrollContainer.addEventListener(
           "scroll",
           () => {
-            if (performance.now() < suppressViewportScrollUntilRef.current) {
+            const now = performance.now();
+            if (timelineDiagnosticsEnabled) {
+              timelineDiag.scrollEventCount += 1;
+              const currentScrollLeft = peekPan.scrollContainer.scrollLeft;
+              const delta = currentScrollLeft - timelineDiag.lastObservedScrollLeft;
+              timelineDiag.lastObservedScrollLeft = currentScrollLeft;
+              if (
+                wsPlaybackSurface.isPlaying() &&
+                Math.abs(delta) > 0.02 &&
+                now > timelineDiag.approvedScrollWriteUntilMs &&
+                now > programmaticWaveScrollUntilRef.current
+              ) {
+                warnTimelineDiagnostic(
+                  "scroll-changed-without-approved-rebase",
+                  "scrollLeft changed during playback without approved programmatic rebase",
+                  {
+                    delta,
+                    currentScrollLeft,
+                    approvedScrollWriteUntilMs:
+                      timelineDiag.approvedScrollWriteUntilMs,
+                    programmaticWaveScrollUntilMs:
+                      programmaticWaveScrollUntilRef.current,
+                  },
+                );
+              }
+            }
+            if (
+              now < suppressViewportScrollUntilRef.current ||
+              now < programmaticWaveScrollUntilRef.current
+            ) {
               return;
             }
             const st = useWoodshedStore.getState();
@@ -1305,16 +2055,19 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       ws.on("play", () => {
         useWoodshedStore.getState().setPlaying(true);
         lastTransportUiMs = 0;
+        updateViewport({ force: true });
         cancelTightLoop();
         tightLoopRaf = requestAnimationFrame(loopBoundaryStep);
       });
       ws.on("pause", () => {
         cancelTightLoop();
         useWoodshedStore.getState().setPlaying(false);
+        updateViewport({ force: true });
       });
       ws.on("finish", () => {
         cancelTightLoop();
         useWoodshedStore.getState().setPlaying(false);
+        updateViewport({ force: true });
       });
 
       ws.on("decode", (dur) => {
@@ -1418,6 +2171,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       releaseWaveClickIntentRef.current = null;
       releaseWaveRegionDblClickRef.current?.();
       releaseWaveRegionDblClickRef.current = null;
+      releaseWaveVisualPlayheadRef.current?.();
+      releaseWaveVisualPlayheadRef.current = null;
+      releaseWaveInteractionPrepRef.current?.();
+      releaseWaveInteractionPrepRef.current = null;
+      flushWavePlaybackVisualOffsetRef.current = null;
       pinchZoomReleaseRef.current?.();
       pinchZoomReleaseRef.current = null;
       wavesurferRef.current?.destroy();
@@ -1516,11 +2274,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   useEffect(() => {
     const ws = wavesurferRef.current;
     if (!ws) return;
-    /** While repeat phrase is on, never auto-scroll the waveform — even after the user leaves phrase-focus. */
-    const followPlayback = !loopPlaybackEnabled;
+    /** Playback-follow scrolling is workspace-owned (fixed visual playhead), never WaveSurfer-owned. */
     ws.setOptions({
-      autoScroll: followPlayback,
-      autoCenter: followPlayback,
+      autoScroll: false,
+      autoCenter: false,
     });
   }, [loopPlaybackEnabled]);
 
@@ -1813,6 +2570,19 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               loopPracticeScope,
               phraseHasSegForRegions,
             );
+            const baseBoxShadow = el.style.boxShadow;
+            const baseFilter = el.style.filter;
+            const hoverBoxShadow = `${baseBoxShadow}, 0 0 10px rgba(184, 202, 236, 0.12)`;
+            el.style.transition =
+              "box-shadow 130ms ease, filter 130ms ease, border-color 130ms ease";
+            el.onpointerenter = () => {
+              el.style.boxShadow = hoverBoxShadow;
+              el.style.filter = "brightness(1.02)";
+            };
+            el.onpointerleave = () => {
+              el.style.boxShadow = baseBoxShadow;
+              el.style.filter = baseFilter;
+            };
           }
         });
 
@@ -2601,7 +3371,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const exitMobileEditMode = useCallback(() => {
     const st = useWoodshedStore.getState();
-    exitDesktopEditModeToPractice(st);
+    exitPracticeEditModeToPractice(st);
     setMobileEditModeActive(false);
   }, []);
 
@@ -2614,17 +3384,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleExistingRegionDoubleClick = useCallback(
     (target: ExistingRegionDoubleClickTarget) => {
-      const st = useWoodshedStore.getState();
-      const compatibility = resolvePracticeEditCompatibility(st);
-      if (compatibility.editMode) {
-        exitDesktopEditModeToPractice(st);
-        return;
-      }
       if (target.kind === "focus") {
-        enterFocusLoopStructuralEdit(target.phraseId, target.segmentId);
+        toggleFocusLoopStructuralEdit(target.phraseId, target.segmentId);
         return;
       }
-      enterPracticeSectionStructuralEdit(target.phraseId);
+      togglePracticeSectionStructuralEdit(target.phraseId);
     },
     [],
   );
@@ -2658,10 +3422,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleTransportEditContext = useCallback(() => {
     const st = useWoodshedStore.getState();
-    if (!activeLoopId) return;
     const compatibility = resolvePracticeEditCompatibility(st);
     if (compatibility.editMode) {
-      exitDesktopEditModeToPractice(st);
+      exitPracticeEditModeToPractice(st);
       return;
     }
     if (
@@ -2674,11 +3437,20 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     }
     const segId = st.activeSegmentId;
     if (segId) {
-      enterFocusLoopStructuralEdit(activeLoopId, segId);
-      st.requestInspectorSegmentFieldFocus();
-      return;
+      const segmentPhraseId =
+        st.loops.find((loop) => loop.segments?.some((s) => s.id === segId))?.id ??
+        activeLoopId;
+      if (segmentPhraseId) {
+        const entered = enterFocusLoopStructuralEdit(segmentPhraseId, segId);
+        if (entered) {
+          st.requestInspectorSegmentFieldFocus();
+          return;
+        }
+      }
     }
-    enterPracticeSectionStructuralEdit(activeLoopId);
+    const phraseId = activeLoopId;
+    if (!phraseId) return;
+    enterPracticeSectionStructuralEdit(phraseId);
   }, [activeLoopId]);
 
   const handleTransportDeleteContext = useCallback(() => {
@@ -2734,6 +3506,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
       const seekSec = decision?.clampedTime ?? sec;
       st.exitPhraseFitAfterUserNavigation();
+      flushWavePlaybackVisualOffsetRef.current?.("keep-view");
+      suspendWavePlaybackVisualFollowUntilRef.current = performance.now() + 180;
       getPlaybackSurface()?.seek(seekSec);
       st.setCurrentTime(seekSec);
     },
@@ -3068,7 +3842,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               <>
                 <div
                   className={cn(
-                    "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                    "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)] motion-safe:transition-shadow duration-300",
                     "touch-manipulation border-b px-3 py-2 transition-[box-shadow,background-color] duration-150",
                     mobileEditModeActive
                       ? "border-violet-500/25 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.12)] bg-gradient-to-br from-[#0c0820] via-[#0b0806] to-[#10080a]"
@@ -3203,15 +3977,136 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                 <div
                   ref={desktopWaveformColumnRef}
                   className={cn(
-                    "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]",
+                    "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)] motion-safe:transition-shadow duration-300",
                     "border-0 px-3 py-2 sm:px-4 sm:py-2.5",
                   )}
                 >
+                  {!showEmptyWorkspace && UPLOADED_AUDIO_TOP_RULER_ENABLED ? (
+                    <div
+                      ref={waveformRulerMotionRef}
+                      className="shrink-0 will-change-transform"
+                    >
+                      <TimeRuler
+                        duration={duration}
+                        pxPerSec={minPxPerSec}
+                        scrollLeftPx={waveScrollMetrics.scrollLeft}
+                        viewportWidthPx={waveScrollMetrics.clientWidth}
+                        contentWidthPx={uploadedRulerContentWidthPx}
+                        leftOffsetPx={WAVEFORM_HORIZONTAL_GUTTER_PX}
+                        className="shrink-0"
+                        diagnostics={
+                          timelineDiagnosticsEnabled
+                            ? {
+                                enabled: true,
+                                onRender: () => {
+                                  timelineRulerRenderCountRef.current += 1;
+                                  timelineDiagnosticsRef.current.rulerRenderCount =
+                                    timelineRulerRenderCountRef.current;
+                                },
+                              }
+                            : undefined
+                        }
+                      />
+                    </div>
+                  ) : null}
                   <div
                     ref={containerRef}
                     data-testid="primary-waveform"
                     className="relative z-0 min-h-0 flex-1 w-full"
                   />
+                  <div
+                    ref={waveformVisualPlayheadRef}
+                    aria-hidden="true"
+                    className={cn(
+                      "pointer-events-none absolute bottom-2 top-2 z-[46] w-px rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-500 shadow-[0_0_24px_rgba(251,191,36,0.36)] transition-[opacity] duration-100 will-change-transform",
+                      showEmptyWorkspace && "opacity-0",
+                    )}
+                    style={{ opacity: 0, transform: "translate3d(-9999px, 0, 0)" }}
+                  />
+                  {timelineDiagnosticsEnabled &&
+                  DEV_TIMELINE_DIAGNOSTICS.overlay &&
+                  timelineDiagnosticsOverlay ? (
+                    <div className="pointer-events-none absolute right-5 top-2 z-[90] max-w-[360px] rounded-md border border-lime-500/45 bg-black/80 px-2 py-1.5 font-mono text-[10px] leading-[1.25] text-lime-200 shadow-[0_0_0_1px_rgba(132,204,22,0.15),0_8px_22px_rgba(0,0,0,0.45)]">
+                      <div className="mb-1 text-[9px] uppercase tracking-[0.08em] text-lime-300/95">
+                        Timeline Diagnostics
+                      </div>
+                      <div>
+                        rafDelta={timelineDiagnosticsOverlay.rafDeltaMs.toFixed(2)}ms
+                      </div>
+                      <div>
+                        t={timelineDiagnosticsOverlay.playbackSeconds.toFixed(3)}s
+                      </div>
+                      <div>
+                        desiredScroll=
+                        {timelineDiagnosticsOverlay.desiredScrollLeft == null
+                          ? "n/a"
+                          : timelineDiagnosticsOverlay.desiredScrollLeft.toFixed(2)}
+                      </div>
+                      <div>
+                        actualScroll={timelineDiagnosticsOverlay.actualScrollLeft.toFixed(2)}
+                      </div>
+                      <div>
+                        visualX={timelineDiagnosticsOverlay.visualTranslateX.toFixed(2)}
+                      </div>
+                      <div>
+                        waveformTx=
+                        {timelineDiagnosticsOverlay.waveformTransformPx.toFixed(2)}
+                      </div>
+                      <div>
+                        rulerTx={timelineDiagnosticsOverlay.rulerTransformPx.toFixed(2)}
+                      </div>
+                      <div>
+                        mismatchFrames=
+                        {timelineDiagnosticsOverlay.transformMismatchFrames}
+                      </div>
+                      <div>
+                        mismatchSeen=
+                        {timelineDiagnosticsOverlay.transformMismatchFrames > 0
+                          ? "yes"
+                          : "no"}
+                      </div>
+                      <div>
+                        rebaseCount={timelineDiagnosticsOverlay.rebaseCount}
+                      </div>
+                      <div>
+                        rebaseAt=
+                        {timelineDiagnosticsOverlay.rebaseTimestampMs == null
+                          ? "n/a"
+                          : `${timelineDiagnosticsOverlay.rebaseTimestampMs.toFixed(0)}ms`}
+                      </div>
+                      <div>
+                        scrollWrites={timelineDiagnosticsOverlay.scrollLeftWriteCount}
+                      </div>
+                      <div>
+                        scrollEvents={timelineDiagnosticsOverlay.scrollEventCount}
+                      </div>
+                      <div>
+                        viewportUpdates=
+                        {timelineDiagnosticsOverlay.viewportMetricUpdateCount}
+                      </div>
+                      <div>
+                        renders(timeline/ruler)=
+                        {timelineDiagnosticsOverlay.timelineRenderCount}/
+                        {timelineDiagnosticsOverlay.rulerRenderCount}
+                      </div>
+                      <div>
+                        wsScrollWhilePlaying=
+                        {
+                          timelineDiagnosticsOverlay.waveSurferScrollEventsDuringPlayback
+                        }
+                      </div>
+                      <div>
+                        wsInteractWhilePlaying=
+                        {
+                          timelineDiagnosticsOverlay.waveSurferInteractionEventsDuringPlayback
+                        }
+                      </div>
+                      <div>
+                        roundedFrames=
+                        {timelineDiagnosticsOverlay.roundedTransformFrames}
+                      </div>
+                    </div>
+                  ) : null}
                   {showEmptyWorkspace ? (
                     <WorkspaceEmptyState
                       onCreateNewProject={handleEmptyWorkspaceCreateProject}
@@ -3289,6 +4184,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                     regionContextActive={regionContextActive}
                     activeLoopId={activeLoopId}
                     editableLoopId={editableLoopId}
+                    interactionModeChip={{
+                      editingEnabled: desktopStructuralEditActive,
+                    }}
                     onToggleEditContext={handleTransportEditContext}
                     onDeleteContext={handleTransportDeleteContext}
                     tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
@@ -3432,40 +4330,85 @@ function loopBracketStep(shift: boolean, alt: boolean) {
  */
 const PAN_THRESHOLD_PX = 4;
 
-/**
- * Install the click-drag pan gesture on the waveform scroll container.
- *
- * Returns a cleanup function that detaches all listeners.
- *
- * Implementation notes:
- *   - We don't `preventDefault` on pointerdown so WaveSurfer's click-to-seek
- *     still works for real (non-dragging) clicks.
- *   - Once we cross the slop threshold, we capture the pointer and intercept
- *     the subsequent `click` event in the capture phase. Without that,
- *     WaveSurfer's interaction layer would seek to wherever the pointer
- *     released, which would feel terrible after a pan.
- *   - Editable regions are skipped — the regions plugin owns those gestures.
- *     Locked / selected regions fall through, so dragging across them pans.
- */
+/** Install default drag-scrub with edge auto-pan on the waveform scroll container. */
 function installWaveformPanGesture(
-  container: HTMLElement,
-  isMobilePractice?: () => boolean,
+  args: {
+    container: HTMLElement;
+    isMobilePractice?: () => boolean;
+    getWave: () => WaveSurfer | null;
+    getMinPxPerSec: () => number;
+    onScrubSeconds: (seconds: number) => void;
+  },
 ): () => void {
-  container.style.cursor = "grab";
+  const {
+    container,
+    isMobilePractice,
+    getWave,
+    getMinPxPerSec,
+    onScrubSeconds,
+  } = args;
+  container.style.cursor = "ew-resize";
 
   let startX = 0;
-  let startScrollLeft = 0;
+  let lastClientX = 0;
   let activePointerId: number | null = null;
   let armed = false;
-  let panning = false;
+  let dragging = false;
   let suppressNextClick = false;
+  let autoPanRaf = 0;
 
   const reset = () => {
     armed = false;
-    panning = false;
+    dragging = false;
     activePointerId = null;
-    container.style.cursor = "grab";
+    lastClientX = 0;
+    if (autoPanRaf !== 0) {
+      cancelAnimationFrame(autoPanRaf);
+      autoPanRaf = 0;
+    }
+    container.style.cursor = "ew-resize";
     container.classList.remove("is-panning");
+  };
+  const EDGE_AUTOPAN_ZONE_PX = 42;
+  const edgeAutoPanDelta = (clientX: number): number => {
+    const rect = container.getBoundingClientRect();
+    const leftDist = clientX - rect.left;
+    const rightDist = rect.right - clientX;
+    if (leftDist < EDGE_AUTOPAN_ZONE_PX) {
+      const overshoot = EDGE_AUTOPAN_ZONE_PX - leftDist;
+      const n = Math.min(1.6, Math.max(0, overshoot / EDGE_AUTOPAN_ZONE_PX));
+      return -(1.4 + n * 10.5);
+    }
+    if (rightDist < EDGE_AUTOPAN_ZONE_PX) {
+      const overshoot = EDGE_AUTOPAN_ZONE_PX - rightDist;
+      const n = Math.min(1.6, Math.max(0, overshoot / EDGE_AUTOPAN_ZONE_PX));
+      return 1.4 + n * 10.5;
+    }
+    return 0;
+  };
+  const scrubAtClientX = (clientX: number) => {
+    const ws = getWave();
+    if (!ws) return;
+    const pxPerSec = getMinPxPerSec();
+    if (!Number.isFinite(pxPerSec) || pxPerSec <= 0) return;
+    const seconds = timeAtWaveformClientX(ws, container, clientX, pxPerSec);
+    onScrubSeconds(seconds);
+  };
+  const autoPanStep = () => {
+    if (!dragging || activePointerId == null) {
+      autoPanRaf = 0;
+      return;
+    }
+    const maxScroll = Math.max(0, container.scrollWidth - container.clientWidth);
+    const delta = edgeAutoPanDelta(lastClientX);
+    if (delta !== 0 && maxScroll > 0) {
+      const next = Math.min(maxScroll, Math.max(0, container.scrollLeft + delta));
+      if (next !== container.scrollLeft) {
+        container.scrollLeft = next;
+        scrubAtClientX(lastClientX);
+      }
+    }
+    autoPanRaf = requestAnimationFrame(autoPanStep);
   };
 
   const onPointerDown = (event: PointerEvent) => {
@@ -3474,47 +4417,51 @@ function installWaveformPanGesture(
     /** Shift+drag authoring owns the gesture — do not arm waveform pan. */
     if (event.shiftKey) return;
     const target = event.target as Element | null;
-    /** Editable region drag/resize is owned by the WaveSurfer regions plugin. */
-    if (target?.closest(".woodshed-region-editing")) return;
-    /** Focus region markers use region clicks — do not arm waveform pan from them. */
-    if (target?.closest(".woodshed-region-segment")) return;
+    const onPhraseHandles = target?.closest('[part*="region-handle"]');
+    const onPhraseRegion = target?.closest(".woodshed-region-editing");
+    const onFocusRegion = target?.closest(".woodshed-region-segment");
+    /** Region handles and region-level interactions always retain priority. */
+    if (onPhraseHandles || onPhraseRegion || onFocusRegion) return;
 
     startX = event.clientX;
-    startScrollLeft = container.scrollLeft;
+    lastClientX = event.clientX;
     activePointerId = event.pointerId;
     armed = true;
-    panning = false;
+    dragging = false;
   };
 
   const onPointerMove = (event: PointerEvent) => {
     if (isMobilePractice?.()) return;
     if (!armed || event.pointerId !== activePointerId) return;
     const dx = event.clientX - startX;
-    if (!panning) {
-      if (Math.abs(dx) < PAN_THRESHOLD_PX) return;
-      panning = true;
+    if (Math.abs(dx) < PAN_THRESHOLD_PX) return;
+    if (!dragging) {
+      dragging = true;
+      suppressNextClick = true;
       try {
         container.setPointerCapture(event.pointerId);
       } catch {
         /* capture is best-effort */
       }
-      container.style.cursor = "grabbing";
       container.classList.add("is-panning");
+      if (autoPanRaf === 0) {
+        autoPanRaf = requestAnimationFrame(autoPanStep);
+      }
     }
-    container.scrollLeft = startScrollLeft - dx;
+    lastClientX = event.clientX;
+    scrubAtClientX(lastClientX);
     event.preventDefault();
   };
 
   const onPointerEnd = (event: PointerEvent) => {
     if (event.pointerId !== activePointerId) return;
-    if (panning) {
+    if (dragging) {
+      scrubAtClientX(event.clientX);
       try {
         container.releasePointerCapture(event.pointerId);
       } catch {
         /* release is best-effort */
       }
-      /** Stop WaveSurfer's click-to-seek that would otherwise fire on release. */
-      suppressNextClick = true;
     }
     reset();
   };
@@ -3540,6 +4487,10 @@ function installWaveformPanGesture(
     container.removeEventListener("click", onClickCapture, true);
     container.style.cursor = "";
     container.classList.remove("is-panning");
+    if (autoPanRaf !== 0) {
+      cancelAnimationFrame(autoPanRaf);
+      autoPanRaf = 0;
+    }
   };
 }
 
@@ -3678,25 +4629,6 @@ function installWaveformRegionDoubleClickEditEntry(args: {
   return () => {
     scrollContainer.removeEventListener("click", onClickCapture, true);
   };
-}
-
-function exitDesktopEditModeToPractice(snapshot: ReturnType<
-  typeof useWoodshedStore.getState
->) {
-  const cleanup = resolvePracticeEditExitCleanup("explicit_done_action");
-  if (cleanup.clearEditableLoopId) {
-    snapshot.setEditableLoopId(null);
-  }
-  if (cleanup.clearFocusUnlocks) {
-    for (const sid of Object.keys(snapshot.focusRegionWaveformEditUnlockedById)) {
-      snapshot.setFocusRegionWaveformEditUnlocked(sid, false);
-    }
-  }
-  if (cleanup.clearPhraseUnlocks) {
-    for (const loopId of Object.keys(snapshot.phraseWaveformEditUnlockedById)) {
-      snapshot.setPhraseWaveformEditUnlocked(loopId, false);
-    }
-  }
 }
 
 const WS_DIAG_KEY = "__woodshedWsDiagIds";

@@ -77,8 +77,12 @@ import {
 import {
   canEnterPracticeEditMode,
   resolvePracticeEditCompatibility,
-  resolvePracticeEditExitCleanup,
 } from "@/lib/interaction/practice-edit-mode";
+import {
+  enterFocusLoopStructuralEdit,
+  enterPracticeSectionStructuralEdit,
+  exitPracticeEditModeToPractice,
+} from "@/lib/woodshed-enter-region-edit";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 export type YoutubeWorkspaceHandle = {
@@ -1025,27 +1029,9 @@ export const YoutubeWorkspace = forwardRef<
 
   const handleTransportEditContext = useCallback(() => {
     const st = useWoodshedStore.getState();
-    if (!activeLoopId) return;
     const compatibility = resolvePracticeEditCompatibility(st);
-    if (
-      compatibility.editMode &&
-      st.editableLoopId != null &&
-      st.editableLoopId === activeLoopId
-    ) {
-      const cleanup = resolvePracticeEditExitCleanup("explicit_done_action");
-      if (cleanup.clearEditableLoopId) {
-        st.setEditableLoopId(null);
-      }
-      if (cleanup.clearFocusUnlocks) {
-        for (const sid of Object.keys(st.focusRegionWaveformEditUnlockedById)) {
-          st.setFocusRegionWaveformEditUnlocked(sid, false);
-        }
-      }
-      if (cleanup.clearPhraseUnlocks) {
-        for (const loopId of Object.keys(st.phraseWaveformEditUnlockedById)) {
-          st.setPhraseWaveformEditUnlocked(loopId, false);
-        }
-      }
+    if (compatibility.editMode) {
+      exitPracticeEditModeToPractice(st);
       return;
     }
     if (
@@ -1056,20 +1042,22 @@ export const YoutubeWorkspace = forwardRef<
     ) {
       return;
     }
-    const loop = st.loops.find((l) => l.id === activeLoopId);
     const segId = st.activeSegmentId;
-    const hasSeg = Boolean(
-      segId && loop?.segments?.some((s) => s.id === segId),
-    );
-    if (hasSeg) {
-      st.requestInspectorSegmentFieldFocus();
-      return;
+    if (segId) {
+      const segmentPhraseId =
+        st.loops.find((loop) => loop.segments?.some((s) => s.id === segId))?.id ??
+        activeLoopId;
+      if (segmentPhraseId) {
+        const entered = enterFocusLoopStructuralEdit(segmentPhraseId, segId);
+        if (entered) {
+          st.requestInspectorSegmentFieldFocus();
+          return;
+        }
+      }
     }
-    for (const sid of Object.keys(st.focusRegionWaveformEditUnlockedById)) {
-      st.setFocusRegionWaveformEditUnlocked(sid, false);
-    }
-    st.setEditableLoopId(activeLoopId);
-    st.setActiveSegmentId(null);
+    const phraseId = activeLoopId;
+    if (!phraseId) return;
+    enterPracticeSectionStructuralEdit(phraseId);
   }, [activeLoopId]);
 
   const handleTransportDeleteContext = useCallback(() => {
@@ -1261,7 +1249,7 @@ export const YoutubeWorkspace = forwardRef<
       >
         {mobileStackedLayout ? (
           <>
-            <div className="relative flex max-h-[min(40svh,268px)] min-h-[104px] shrink-0 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)]">
+            <div className="relative flex max-h-[min(40svh,268px)] min-h-[104px] shrink-0 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.024)]">
               {duration > 0 ? (
                 <NeutralTimelinePrototype
                   duration={duration}
@@ -1290,8 +1278,8 @@ export const YoutubeWorkspace = forwardRef<
                 {stackedChrome}
               </div>
             ) : null}
-            <div className="w-full min-w-0 shrink-0 overflow-hidden border-t border-stone-800/42 bg-[#050403]/98 px-2 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5">
-              <div className="flex items-center justify-between gap-2 pb-0.5">
+            <div className="w-full min-w-0 shrink-0 overflow-hidden border-t border-stone-800/32 bg-[#050403]/97 px-2 pb-[max(0.3rem,env(safe-area-inset-bottom))] pt-1">
+              <div className="flex items-center justify-between gap-2 pb-px">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[11px] font-semibold leading-snug tracking-tight text-stone-100">
                     {youtubeSessionPresentation.primary}
@@ -1317,7 +1305,7 @@ export const YoutubeWorkspace = forwardRef<
                   ref={hostRef}
                   tabIndex={-1}
                   className={cn(
-                    "relative mx-auto w-full max-w-full overflow-hidden rounded-[10px] border border-white/[0.055] bg-[#050403] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-black/60",
+                    "relative mx-auto w-full max-w-full overflow-hidden rounded-[10px] border border-white/[0.05] bg-[#050403] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] outline-none ring-1 ring-black/55",
                     youtubeSourceExpanded
                       ? "aspect-video max-h-[min(26svh,200px)]"
                       : "aspect-video max-h-[64px] opacity-[0.94]",

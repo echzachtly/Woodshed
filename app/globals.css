@@ -42,9 +42,39 @@ body {
   }
 }
 
-/** WaveSurfer cursor part — hidden; playback is shown only via waveform fill. */
-::part(cursor) {
-  display: none !important;
+/** WaveSurfer cursor part — canonical warm playhead (style shadow host, not parent container). */
+[data-ws-shadow-host="true"]::part(cursor) {
+  width: 2px !important;
+  background: linear-gradient(
+    to bottom,
+    rgba(253, 230, 138, 0.98),
+    rgba(251, 191, 36, 0.96),
+    rgba(245, 158, 11, 0.94)
+  ) !important;
+  border-radius: 999px;
+  box-shadow:
+    0 0 26px rgba(251, 191, 36, 0.42),
+    0 0 8px rgba(245, 158, 11, 0.4);
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 60;
+}
+
+[data-ws-shadow-host="true"][data-ws-visual-playhead-overlay="true"]::part(cursor) {
+  background: transparent !important;
+  box-shadow: none;
+  opacity: 0.01;
+}
+
+[data-ws-shadow-host="true"]::part(cursor):hover {
+  box-shadow:
+    0 0 30px rgba(251, 191, 36, 0.52),
+    0 0 12px rgba(245, 158, 11, 0.5);
+}
+
+[data-ws-shadow-host="true"][data-ws-visual-playhead-overlay="true"]::part(cursor):hover {
+  box-shadow: none;
 }
 
 /** Belt-and-suspenders: also hide any horizontal scrollbar inside the waveform host. */

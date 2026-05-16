@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  Lock,
-  LockOpen,
   Pause,
   Play,
   Repeat,
@@ -104,11 +102,13 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
   const loopTooltip = `${getLoopModeDescription(loopCurrent)} — Next: ${getLoopModeDescription(loopNext)}. Click to cycle.`;
   const loopAriaLabel = `Practice loop. ${getLoopModeDescription(loopCurrent)}. Next: ${getLoopModeDescription(loopNext)}.`;
 
-  const editTitle = editingPhrase
-    ? "Practice Mode — lock phrase waveform boundaries"
-    : regionContextActive
-      ? "Unlock focus boundaries (Edit Mode)"
-      : "Edit Mode — unlock phrase waveform boundaries";
+  const modeEditingEnabled = interactionModeChip?.editingEnabled ?? editingPhrase;
+  const modeLabel = modeEditingEnabled ? "Edit" : "Practice";
+  const modeNextLabel = modeEditingEnabled ? "Practice" : "Edit";
+  const modeTitle = modeEditingEnabled
+    ? "Edit Mode — region editing enabled. Click to switch to Practice Mode."
+    : "Practice Mode — protected from accidental edits. Click to switch to Edit Mode.";
+  const modeAriaLabel = `${modeLabel} Mode. Click to switch to ${modeNextLabel} Mode.`;
 
   const deleteTitle = regionContextActive
     ? "Delete focus region"
@@ -238,47 +238,26 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
           </span>
         </button>
 
-        {interactionModeChip ? (
-          <span
-            className={cn(
-              "hidden max-w-[5.75rem] overflow-hidden truncate rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.1em] sm:inline lg:max-w-[7rem]",
-              interactionModeChip.editingEnabled
-                ? "border-amber-500/38 bg-amber-500/[0.11] text-amber-100/93"
-                : "border-emerald-500/[0.26] bg-emerald-950/45 text-emerald-100/[0.92]",
-            )}
-            aria-label={
-              interactionModeChip.editingEnabled
-                ? "Edit Mode — waveform boundaries editable"
-                : "Practice Mode — protected from accidental edits"
-            }
-            title={
-              interactionModeChip.editingEnabled
-                ? "Edit Mode — intentional authoring"
-                : "Practice Mode — use lock to edit boundaries or Shift-drag to author"
-            }
-          >
-            {interactionModeChip.editingEnabled ? "Edit" : "Practice"}
-          </span>
-        ) : null}
-
-        <Button
-          variant="ghost"
+        <button
           type="button"
           className={cn(
-            "h-8 w-8 p-0 text-stone-500 hover:text-stone-200",
-            editingPhrase && "text-amber-100/95 hover:text-amber-50",
+            "inline-flex h-8 shrink-0 items-center rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] transition-[border-color,background-color,color,box-shadow,transform] duration-150",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-500/50",
+            "active:translate-y-[0.5px]",
+            timelineIdle &&
+              "pointer-events-none border-stone-800/60 bg-stone-950/50 text-stone-600 opacity-70",
+            !timelineIdle &&
+              (modeEditingEnabled
+                ? "border-amber-500/38 bg-amber-500/[0.11] text-amber-100/93 hover:border-amber-400/52 hover:bg-amber-500/[0.16] hover:text-amber-50"
+                : "border-emerald-500/[0.26] bg-emerald-950/45 text-emerald-100/[0.92] hover:border-emerald-400/42 hover:bg-emerald-900/50 hover:text-emerald-50"),
           )}
           disabled={!hasActivePhrase || timelineIdle}
-          aria-label={editTitle}
-          title={editTitle}
+          aria-label={modeAriaLabel}
+          title={modeTitle}
           onClick={onToggleEditContext}
         >
-          {editingPhrase ? (
-            <Lock className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
-          ) : (
-            <LockOpen className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
-          )}
-        </Button>
+          {modeLabel}
+        </button>
         <Button
           variant="ghost"
           type="button"

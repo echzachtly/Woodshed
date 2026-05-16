@@ -11,7 +11,7 @@
  * Bounds clamping matches store expectations (`updateLoopBounds`, `updateSegment`, `clampSegmentsToPhraseBounds`).
  *
  * **Uploaded-audio parity (when `authoring.enabled`):**
- * - Plain click+drag on the strip = **pan/scroll** (like the main waveform).
+ * - Plain click+drag on the strip = **scrub**, with edge auto-pan while dragging.
  * - **Shift+drag** uses the same rule as `shiftDragShouldCreateFocusInsideActivePhrase`; when
  *   `phraseWaveformEditUnlockedById` is supplied (YouTube/desktop parity), commits only while the
  *   active Practice Section waveform is unlocked in the store (`editableLoopId` / transport lock).
@@ -37,13 +37,13 @@ import type { PracticeLoop, PhraseSegment } from "@/lib/loop-engine";
 import { cn } from "@/lib/utils";
 
 import {
-  pickMajorTickIntervalSec,
   pointerClientToSeconds,
   scrollHostContentLeftClientX,
   secondsToContentPx,
   timelineSongContentWidthPx,
 } from "@/components/neutral-timeline/timeline-coordinates";
 import { SyntheticWaveBedCanvas } from "@/components/neutral-timeline/synthetic-wave-bed-canvas";
+import { TimeRuler } from "@/components/timeline/time-ruler";
 import {
   clampPhraseMoveDelta,
   clampPhraseStartEnd,
@@ -60,10 +60,15 @@ import { applyNeutralTimelineWheelZoomAnchoredToCursor } from "@/lib/neutral-tim
 import { resolvePracticeEditCompatibility } from "@/lib/interaction/practice-edit-mode";
 import { deriveRegionVisualState, type RegionZIndexTier } from "@/lib/regions/region-visual-state";
 import {
-  enterFocusLoopStructuralEdit,
-  enterPracticeSectionStructuralEdit,
-  isStructuralPracticeMode,
+  toggleFocusLoopStructuralEdit,
+  togglePracticeSectionStructuralEdit,
 } from "@/lib/woodshed-enter-region-edit";
+import {
+  NEUTRAL_FOCUS_LANE_CHROME,
+  resolveNeutralFocusChrome,
+  resolveNeutralSectionChrome,
+  TIMELINE_REGION_LAYOUT,
+} from "@/lib/regions/region-visual-language";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 
 export type SyntheticTimelineAuthoringConfig = {
@@ -144,6 +149,7 @@ const PAN_SLOP_PX = 4;
 /** Draft phrase ghost height hint (fraction of track). Focus ghost is vertically centered inside the lane. */
 const PHRASE_GHOST_VERTICAL_FRAC = 0.2;
 const TRACK_VERTICAL_GUTTER_PX = 6;
+const EDGE_AUTOPAN_ZONE_PX = 42;
 
 const TRACK_BAND_MAX_COMPACT_PX = 118;
 
@@ -201,10 +207,9 @@ function neutralFocusZ(tier: RegionZIndexTier): number {
 
 type Gesture =
   | {
-      mode: "pan";
+      mode: "scrub";
       pid: number;
       ax: number;
-      sl: number;
       moved: boolean;
     }
   | {
@@ -278,14 +283,6 @@ function loopsForPhrasePaint(loopsInput: PracticeLoop[]): PracticeLoop[] {
   );
 }
 
-function fmtRuler(seconds: number): string {
-  if (!(seconds >= 0) || !Number.isFinite(seconds)) return "0:00";
-  const fl = Math.floor(seconds);
-  const m = Math.floor(fl / 60);
-  const s = fl % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
 export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
   props: NeutralTimelinePrototypeProps,
 ) {
@@ -333,6 +330,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     scrollWidth: 1,
     clientWidth: 1,
   });
+  const [hoveredFocusSegmentId, setHoveredFocusSegmentId] = useState<string | null>(
+    null,
+  );
   const [ghostNonce, setGhostTick] = useState(0);
   const bumpGhost = useCallback(() => setGhostTick((n) => n + 1), []);
 
@@ -400,18 +400,6 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     const raw = secondsToContentPx(t, pxPerSec);
     return Math.min(timelineSongWidthPx, Math.max(0, raw));
   }, [currentTime, duration, pxPerSec, timelineSongWidthPx]);
-
-  const tickMajorSec = useMemo(() => pickMajorTickIntervalSec(pxPerSec), [pxPerSec]);
-  const tickMarks = useMemo(() => {
-    if (!(duration > 0)) return [];
-    const out: number[] = [];
-    for (let t = 0; t <= duration + 1e-6; t += tickMajorSec) {
-      out.push(Math.min(t, duration));
-    }
-    return out;
-  }, [duration, tickMajorSec]);
-
-
 
   const orderedLoopsPhrasePaint = useMemo(
     () => loopsForPhrasePaint(loops),
@@ -547,6 +535,59 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     (_gesture: Gesture, ctx: SyntheticTimelineAuthoringConfig) => {
       gestureUnhookRef.current?.();
       gestureUnhookRef.current = null;
+      let scrubLastClientX = 0;
+      let scrubAutoPanRaf = 0;
+      const stopScrubAutoPan = () => {
+        if (scrubAutoPanRaf !== 0) {
+          cancelAnimationFrame(scrubAutoPanRaf);
+          scrubAutoPanRaf = 0;
+        }
+      };
+      const edgeAutoPanDelta = (clientX: number): number => {
+        const el = scrollRef.current;
+        if (!el) return 0;
+        const rect = el.getBoundingClientRect();
+        const leftDist = clientX - rect.left;
+        const rightDist = rect.right - clientX;
+        if (leftDist < EDGE_AUTOPAN_ZONE_PX) {
+          const overshoot = EDGE_AUTOPAN_ZONE_PX - leftDist;
+          const n = Math.min(1.6, Math.max(0, overshoot / EDGE_AUTOPAN_ZONE_PX));
+          return -(1.2 + n * 9.8);
+        }
+        if (rightDist < EDGE_AUTOPAN_ZONE_PX) {
+          const overshoot = EDGE_AUTOPAN_ZONE_PX - rightDist;
+          const n = Math.min(1.6, Math.max(0, overshoot / EDGE_AUTOPAN_ZONE_PX));
+          return 1.2 + n * 9.8;
+        }
+        return 0;
+      };
+      const scrubAtClientX = (clientX: number) => {
+        const sec = secsFromClient(clientX);
+        onSeek(sec);
+      };
+      const scrubAutoPanStep = () => {
+        const g = gestureRef.current;
+        if (!g || g.mode !== "scrub") {
+          scrubAutoPanRaf = 0;
+          return;
+        }
+        const el = scrollRef.current;
+        if (!el) {
+          scrubAutoPanRaf = 0;
+          return;
+        }
+        const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+        const delta = edgeAutoPanDelta(scrubLastClientX);
+        if (delta !== 0 && maxScroll > 0) {
+          const next = Math.min(maxScroll, Math.max(0, el.scrollLeft + delta));
+          if (next !== el.scrollLeft) {
+            el.scrollLeft = next;
+            refreshScrollMetrics();
+            scrubAtClientX(scrubLastClientX);
+          }
+        }
+        scrubAutoPanRaf = window.requestAnimationFrame(scrubAutoPanStep);
+      };
 
       const move = (e: PointerEvent) => {
         const g = gestureRef.current;
@@ -554,14 +595,14 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         const live = liveRef.current;
         const secNow = secsFromClient(e.clientX);
 
-        if (g.mode === "pan") {
-          const el = scrollRef.current;
-          if (!el) return;
+        if (g.mode === "scrub") {
           const dx = e.clientX - g.ax;
           if (Math.abs(dx) >= PAN_SLOP_PX) g.moved = true;
-          if (g.moved) {
-            el.scrollLeft = g.sl - dx;
-            refreshScrollMetrics();
+          if (!g.moved) return;
+          scrubLastClientX = e.clientX;
+          scrubAtClientX(scrubLastClientX);
+          if (scrubAutoPanRaf === 0) {
+            scrubAutoPanRaf = window.requestAnimationFrame(scrubAutoPanStep);
           }
           return;
         }
@@ -695,6 +736,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       const up = (e: PointerEvent) => {
         const g = gestureRef.current;
         if (!g || g.pid !== e.pointerId) return;
+        stopScrubAutoPan();
 
         const ghostPhraseDraft = ghostPhraseRef.current;
         const ghostFocusDraft = ghostFocusRef.current;
@@ -716,7 +758,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
         const live = liveRef.current;
 
-        if (g.mode === "pan") {
+        if (g.mode === "scrub") {
           if (!(live.duration > 0)) return;
           if (!g.moved) {
             if (!rulerIgnored(e.target)) {
@@ -724,6 +766,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
               if (ctx.onPlaybackIntentTap) ctx.onPlaybackIntentTap(sec);
               else onSeek(sec);
             }
+          } else {
+            scrubAtClientX(e.clientX);
           }
           return;
         }
@@ -816,6 +860,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       };
 
       gestureUnhookRef.current = () => {
+        stopScrubAutoPan();
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", up);
@@ -922,10 +967,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       if (auth && event.shiftKey && beginDraftShiftGesture(event)) return;
 
       gestureRef.current = {
-        mode: "pan",
+        mode: "scrub",
         pid: event.pointerId,
         ax: event.clientX,
-        sl: el.scrollLeft,
         moved: false,
       };
       try {
@@ -1227,31 +1271,14 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
               </button>
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 top-0 pt-px">
-              {tickMarks.map((t, i) => {
-                const leftPx = secondsToContentPx(t, pxPerSec);
-                const cw = scrollMetrics.clientWidth || 1;
-                const xView = (leftPx - scrollMetrics.scrollLeft) / cw;
-                if (xView < -0.15 || xView > 1.35) return null;
-
-                const showMajor = t === 0 || i === 0 || i % 5 === 0;
-
-                return (
-                  <div
-                    key={`tm-${String(t)}:${i}`}
-                    className="absolute top-[18px]"
-                    style={{ transform: `translateX(${leftPx}px)` }}
-                  >
-                    <span className="block h-[7px] w-px rounded-full bg-stone-700/95" />
-                    {showMajor ? (
-                      <span className="-translate-x-1/2 whitespace-nowrap pl-px font-mono text-[10px] text-stone-500">
-                        {fmtRuler(t)}
-                      </span>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
+            <TimeRuler
+              duration={duration}
+              pxPerSec={pxPerSec}
+              scrollLeftPx={scrollMetrics.scrollLeft}
+              viewportWidthPx={scrollMetrics.clientWidth}
+              contentWidthPx={timelineSongWidthPx}
+              className="pointer-events-none absolute inset-x-0 top-0"
+            />
           </div>
 
           <div
@@ -1357,10 +1384,17 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                   },
                 });
                 const phraseActive = phraseState.isSectionActive;
+                const phraseChrome = resolveNeutralSectionChrome({
+                  active: phraseActive,
+                  calm: timelinePracticeCalmChrome,
+                });
                 /** Horizontal padding aligning nested focus rects with lane insets (~pl-3 + ring). */
                 const innerPadX = 11;
                 /** Space reserved for Practice Section heading above the drill lane. */
                 const laneTopPx = 32;
+                const sectionHeaderInsetX = compactLayout
+                  ? TIMELINE_REGION_LAYOUT.sectionHeaderInsetXCompact
+                  : TIMELINE_REGION_LAYOUT.sectionHeaderInsetX;
                 const phraseStackZ = neutralPhraseZ(phraseState.zIndexTier, paintIx);
 
                 return (
@@ -1368,13 +1402,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                     key={`phrase-slot-${loop.id}`}
                     data-neutral-timeline-region={`phrase:${loop.id}`}
                     className={cn(
-                      "absolute overflow-visible rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] backdrop-blur-[2px] transition-[border-color,box-shadow,opacity] duration-200",
-                      timelinePracticeCalmChrome && "opacity-[0.9]",
-                      phraseActive
-                        ? timelinePracticeCalmChrome
-                          ? "border border-violet-400/26 bg-[linear-gradient(to_bottom,rgba(109,93,217,0.09),rgba(26,23,43,0.28))]"
-                          : "border border-violet-400/44 bg-[linear-gradient(to_bottom,rgba(109,93,217,0.2),rgba(26,23,43,0.42))]"
-                        : "border border-white/[0.06] bg-[linear-gradient(to_bottom,rgba(44,43,71,0.16),rgba(14,13,21,0.34))]",
+                      "absolute overflow-visible rounded-xl border shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] backdrop-blur-[2px] transition-[border-color,box-shadow,opacity] duration-200",
+                      timelinePracticeCalmChrome && "opacity-[0.88]",
                     )}
                     style={{
                       left: pxL,
@@ -1385,6 +1414,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                         52,
                       ),
                       zIndex: phraseStackZ,
+                      borderColor: phraseChrome.borderColor,
+                      background: phraseChrome.background,
                     }}
                     onDoubleClick={(e: ReactMouseEvent<HTMLDivElement>) => {
                       if (
@@ -1395,12 +1426,11 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                         )
                       )
                         return;
-                      if (!isStructuralPracticeMode()) return;
                       const node = e.target as HTMLElement | null;
                       if (node?.closest("[data-neutral-focus-lane]")) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      enterPracticeSectionStructuralEdit(loop.id);
+                      togglePracticeSectionStructuralEdit(loop.id);
                     }}
                     onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
                       const node = e.target as HTMLElement | null;
@@ -1415,17 +1445,17 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                   >
                     <div
                       className={cn(
-                        "pointer-events-none absolute top-2 z-[1] flex min-w-0 items-center gap-2",
-                        compactLayout ? "left-2 right-2" : "left-3 right-3",
+                        "pointer-events-none absolute z-[1] flex min-w-0 items-center gap-2",
                       )}
+                      style={{
+                        top: TIMELINE_REGION_LAYOUT.sectionHeaderTopPx,
+                        left: sectionHeaderInsetX,
+                        right: sectionHeaderInsetX,
+                      }}
                     >
                       <span
-                        className={cn(
-                          "truncate text-[10px] font-semibold uppercase tracking-[0.1em]",
-                          phraseActive
-                            ? "text-violet-100/93"
-                            : "text-white/74",
-                        )}
+                        className="truncate text-[10px] font-semibold uppercase tracking-[0.1em] transition-[color,opacity] duration-150"
+                        style={{ color: phraseChrome.labelColor }}
                       >
                         {loop.name.trim() || "Practice Section"}
                       </span>
@@ -1464,11 +1494,17 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                     ) : null}
 
                     <div
-                      className="pointer-events-none absolute inset-x-2 bottom-2 z-[24] rounded-lg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)] backdrop-blur-[2px]"
-                      style={{ top: laneTopPx }}
+                      className="pointer-events-none absolute inset-x-2 bottom-2 z-[24] rounded-lg backdrop-blur-[2px]"
+                      style={{
+                        top: laneTopPx,
+                        boxShadow: NEUTRAL_FOCUS_LANE_CHROME.shellShadow,
+                      }}
                       data-neutral-focus-lane=""
                     >
-                      <div className="pointer-events-none absolute inset-0 rounded-lg bg-black/[0.16]" />
+                      <div
+                        className="pointer-events-none absolute inset-0 rounded-lg"
+                        style={{ backgroundColor: NEUTRAL_FOCUS_LANE_CHROME.scrimColor }}
+                      />
 
                       {[...(loop.segments ?? [])]
                         .sort((a, b) => a.startTime - b.startTime)
@@ -1502,24 +1538,33 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                           const chipHoverLink =
                             timelineHoverSegmentId === segment.id &&
                             !activeSeg;
+                          const pointerHovered = hoveredFocusSegmentId === segment.id;
                           const focusEditable = phraseOverlayActive && focusState.isEditable;
+                          const focusChrome = resolveNeutralFocusChrome({
+                            active: activeSeg,
+                            chipHover: chipHoverLink || pointerHovered,
+                            hovered: pointerHovered,
+                            dimmed: focusState.isDimmed,
+                            calm: timelinePracticeCalmChrome,
+                          });
+                          const focusLabel =
+                            segment.name.trim().length > 0
+                              ? segment.name.trim()
+                              : "Focus Loop";
+                          const focusHeaderInsetX = compactLayout
+                            ? TIMELINE_REGION_LAYOUT.focusHeaderInsetXCompact
+                            : TIMELINE_REGION_LAYOUT.focusHeaderInsetX;
+                          const focusBodyTopPx =
+                            TIMELINE_REGION_LAYOUT.focusHeaderTopPx +
+                            TIMELINE_REGION_LAYOUT.focusHeaderReservedHeightPx;
 
                           const segClass = cn(
-                            "absolute top-2 bottom-2 rounded-lg transition-[background-color,border-color,box-shadow] duration-150",
+                            "absolute bottom-2 top-2 rounded-lg border transition-[background-color,border-color,box-shadow,filter] duration-150",
                             phraseOverlayActive
                               ? timelinePracticeCalmChrome
                                 ? "pointer-events-auto cursor-default opacity-[0.88]"
                                 : "pointer-events-auto cursor-default"
                               : "pointer-events-none opacity-[0.78]",
-                            activeSeg
-                              ? timelinePracticeCalmChrome
-                                ? "border border-emerald-300/22 bg-emerald-400/[0.07] ring-1 ring-emerald-200/15"
-                                : "border border-emerald-300/30 bg-emerald-400/[0.11] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_0_16px_rgba(167,243,208,0.065)] ring-1 ring-emerald-200/26"
-                              : chipHoverLink
-                                ? "border border-emerald-300/35 bg-emerald-400/[0.09] ring-1 ring-emerald-200/35 shadow-[inset_0_0_12px_rgba(167,243,208,0.08)]"
-                                : focusState.isDimmed
-                                  ? "border border-white/[0.05] bg-emerald-500/[0.052] hover:border-emerald-400/22 hover:bg-emerald-400/[0.085]"
-                                  : "border border-white/[0.06] bg-emerald-500/[0.06] hover:border-emerald-400/24 hover:bg-emerald-400/[0.095]",
                           );
 
                           const zRaise = neutralFocusZ(focusState.zIndexTier);
@@ -1533,11 +1578,18 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                                 left: segPxLRel,
                                 width: segW,
                                 zIndex: zRaise,
+                                borderColor: focusChrome.borderColor,
+                                backgroundColor: focusChrome.backgroundColor,
+                                boxShadow: focusChrome.shadow,
                               }}
                               onPointerEnter={() => {
+                                setHoveredFocusSegmentId(segment.id);
                                 onTimelineFocusSegmentHover?.(segment.id);
                               }}
                               onPointerLeave={() => {
+                                setHoveredFocusSegmentId((prev) =>
+                                  prev === segment.id ? null : prev,
+                                );
                                 onTimelineFocusSegmentHover?.(null);
                               }}
                               onDoubleClick={(e: ReactMouseEvent<HTMLDivElement>) => {
@@ -1549,17 +1601,38 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                                   )
                                 )
                                   return;
-                                if (!isStructuralPracticeMode()) return;
                                 e.preventDefault();
                                 e.stopPropagation();
-                                enterFocusLoopStructuralEdit(loop.id, segment.id);
+                                toggleFocusLoopStructuralEdit(loop.id, segment.id);
                               }}
                             >
+                              <div
+                                className="pointer-events-none absolute z-[3] flex min-w-0 items-center gap-1.5"
+                                style={{
+                                  top: TIMELINE_REGION_LAYOUT.focusHeaderTopPx,
+                                  left: focusHeaderInsetX,
+                                  right: focusHeaderInsetX,
+                                }}
+                              >
+                                <span
+                                  className="truncate text-[8px] font-medium uppercase tracking-[0.085em] transition-[color,opacity] duration-150"
+                                  style={{ color: focusChrome.labelColor }}
+                                >
+                                  {focusLabel}
+                                </span>
+                                <span
+                                  className="h-px min-w-[8px] flex-1"
+                                  style={{
+                                    background: `linear-gradient(to right, rgba(255,255,255,${TIMELINE_REGION_LAYOUT.focusHeaderRailOpacity}), rgba(255,255,255,0))`,
+                                  }}
+                                />
+                              </div>
                               {focusEditable ? (
                                 <>
                                   <div
                                     aria-label={`Focus Loop ${segment.name} start`}
-                                    className="absolute inset-y-1.5 left-0 z-[3] w-2 max-w-[30%] cursor-ew-resize rounded-l-lg bg-emerald-200/26 opacity-90 hover:bg-emerald-100/42"
+                                    className="absolute bottom-1.5 left-0 z-[4] w-2 max-w-[30%] cursor-ew-resize rounded-l-lg bg-emerald-200/22 opacity-90 transition-[background-color] duration-150 hover:bg-emerald-100/34"
+                                    style={{ top: focusBodyTopPx }}
                                     onPointerDown={(e) =>
                                       segmentEdgeResizeDown(e, loop, segment, "start")
                                     }
@@ -1567,16 +1640,16 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                                   <button
                                     type="button"
                                     aria-label={`Drag Focus Loop ${segment.name}`}
-                                    className="absolute inset-y-1 left-2 right-2 z-[2] cursor-grab rounded-sm bg-transparent px-2 pt-px text-left text-[9px] font-medium tracking-tight text-emerald-50/95 hover:bg-black/[0.22] active:cursor-grabbing"
+                                    className="absolute bottom-1 left-2 right-2 z-[2] cursor-grab rounded-sm bg-transparent text-left transition-[background-color] duration-150 hover:bg-black/[0.14] active:cursor-grabbing"
+                                    style={{ top: focusBodyTopPx }}
                                     onPointerDown={(e) =>
                                       segmentBodyMoveDown(e, loop, segment)
                                     }
-                                  >
-                                    {segment.name.trim() || "Focus Loop"}
-                                  </button>
+                                  />
                                   <div
                                     aria-label={`Focus Loop ${segment.name} end`}
-                                    className="absolute inset-y-1.5 right-0 z-[3] w-2 max-w-[30%] cursor-ew-resize rounded-r-lg bg-emerald-200/26 opacity-90 hover:bg-emerald-100/42"
+                                    className="absolute bottom-1.5 right-0 z-[4] w-2 max-w-[30%] cursor-ew-resize rounded-r-lg bg-emerald-200/22 opacity-90 transition-[background-color] duration-150 hover:bg-emerald-100/34"
+                                    style={{ top: focusBodyTopPx }}
                                     onPointerDown={(e) =>
                                       segmentEdgeResizeDown(e, loop, segment, "end")
                                     }
@@ -1586,13 +1659,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                                 <button
                                   type="button"
                                   aria-label={`Select Focus Loop ${segment.name}`}
-                                  className="absolute inset-2 z-[2] cursor-default rounded-md bg-transparent px-2 text-left text-[9px] font-medium tracking-tight text-emerald-50/[0.95] hover:bg-black/[0.18]"
+                                  className="absolute bottom-1 left-2 right-2 z-[2] cursor-default rounded-md bg-transparent text-left transition-[background-color] duration-150 hover:bg-black/[0.1]"
+                                  style={{ top: focusBodyTopPx }}
                                   onPointerDown={(e) =>
                                     segmentSelectPointerDown(e, loop, segment)
                                   }
-                                >
-                                  {segment.name.trim() || "Focus Loop"}
-                                </button>
+                                />
                               ) : null}
                             </div>
                           );

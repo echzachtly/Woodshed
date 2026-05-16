@@ -61,7 +61,7 @@ Panning on the desktop wave, the mini-map, mouse-wheel zoom, and keyboard zoom s
 | **Transport** | Full three-column bar (repeat, phrase start, full song, play, tempo) | Compact stack: phrase picker sheet, repeat, large play, tempo |
 | **Header** | Full project controls + save | Same sessions, compact account, **no save button** (practice only) |
 | **Mini-map** | Interactive (seek + drag viewport) | Shown as **read-only** overview |
-| **Waveform** | Click to seek; drag to pan; double-click adds a phrase; phrase handles when the phrase’s waveform row is **unlocked** in the inspector (or via transport/sidebar Edit); focus handles when that focus region is unlocked | Tap/drag to **seek**; pinch to zoom; phrase region is **non-interactive** (read-only) |
+| **Waveform** | Click to seek · drag to scrub · drag to edge to pan; double-click adds a phrase; phrase handles when the phrase’s waveform row is **unlocked** in the inspector (or via transport/sidebar Edit); focus handles when that focus region is unlocked | Tap/drag to **seek**; pinch to zoom; phrase region is **non-interactive** (read-only) |
 | **Phrase list** | Sidebar list + add phrase | Bottom sheet from the phrase pill |
 
 The underlying **Zustand store** is the same; only the **surface** changes.

@@ -382,6 +382,11 @@ Unify behavior globally before visual unification.
 - unify mode transitions
 - unify intentional gesture behavior
 
+Checkpoint (2026-05-16):
+- YouTube and uploaded-audio desktop surfaces now share symmetric Practice/Edit toggles.
+- Practice/Edit transport pill toggles mode directly in both media paths.
+- Neutral timeline double-click behavior is symmetric (Practice -> Edit -> Practice) for phrase/focus targets.
+
 ### Playback Intelligence Migration
 - click-to-seek everywhere
 - playback context transitions
@@ -436,6 +441,13 @@ Apply the new region hierarchy globally.
 ## Important Constraint
 Do NOT globally port the synthetic timeline rendering.
 Only the region system.
+
+### Current checkpoint (2026-05-16)
+
+- Canonical visual language now exists as shared tokens (`lib/regions/region-visual-language.ts`) and shared state derivation (`lib/regions/region-visual-state.ts`), but parity is still perceptually incomplete in uploaded-audio timelines.
+- Immediate priority pass: focused timeline visual refinement + parity (labels, hierarchy, depth, hover polish, active/inactive balance) across both YouTube and uploaded-audio surfaces.
+- Non-negotiable constraint for this pass: preserve playback/interaction/persistence semantics and keep performance stable on desktop/mobile.
+- Playback motion follow-up checkpoint: uploaded-audio must shift from per-frame `scrollLeft` visual motion to transform-led timeline motion (`baseScrollLeft + visualTranslateX`) so fixed-playhead playback feels as smooth as YouTube under high zoom while preserving WaveSurfer as timing/render authority.
 
 ---
 

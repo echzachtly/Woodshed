@@ -2,7 +2,7 @@
 
 This TODO converts the roadmap into implementation-ready phases with explicit system impact, migration tasks, test requirements, and completion criteria.
 
-## Phase 0 — Alignment and Guardrails (Current)
+## Phase 0 — Alignment and Guardrails (Complete)
 
 ### Goals
 
@@ -520,11 +520,449 @@ Remaining known gaps intentionally deferred:
 - tier states are derived from one shared source of truth
 - phrase/focus hierarchy remains readable across desktop and mobile
 
+### Phase 4 aesthetic refinement pass (2026-05-16)
+
+Status: baseline pass complete for YouTube/Neutral timeline visual language; uploaded-audio WaveSurfer parity was still incomplete at this checkpoint.
+
+Files changed in this pass:
+
+- `lib/regions/region-visual-language.ts` (new canonical timeline visual-language tokens for section/focus hierarchy, calm chrome, and inset lane treatment)
+- `lib/wavesurfer-region-appearance.ts` (now consumes canonical section/focus tokens; reduced Practice Section paint dominance and refined focus inset emphasis)
+- `components/neutral-timeline/neutral-timeline-prototype.tsx` (now consumes canonical neutral section/focus chrome resolvers for hierarchy-consistent renderer paint)
+- `components/youtube-workspace.tsx` (compact stacked YouTube timeline/player chrome spacing and border weight polished to support hierarchy readability)
+- `docs/GLOBAL_UX_UNIFICATION_TODO.md` (phase-status reconciliation + this phase log)
+
+Implementation notes (Phase 4):
+
+- Practice Section visual intensity was reduced (lower fill/edge/glow weight) so structural containers remain visible but less overpowering.
+- Focus Loops were tuned to read as inset targets through stronger lane inset framing and slightly clearer internal focus-region depth cues.
+- Refined YouTube/Neutral visual language is now promoted into canonical shared tokens (`lib/regions/region-visual-language.ts`) so uploaded-audio WaveSurfer and Neutral Timeline paint recipes stay perceptually aligned without renderer rewrites.
+- Shared region visual-state derivation remains the source of truth (`deriveRegionVisualState` unchanged); this pass only adjusts renderer-specific paint primitives.
+- Interaction, keyboard, persistence, schema, and feature-flag behavior were intentionally left unchanged.
+
+Tests run:
+
+- `npm test -- lib/regions/region-visual-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts lib/youtube/youtube-dexie-project.test.ts`
+- `npx tsc --noEmit`
+
+Manual QA checklist (Phase 4 baseline aesthetic refinement):
+
+- [ ] Desktop uploaded audio: Practice Sections remain legible but visually lighter than pre-pass.
+- [ ] Desktop uploaded audio: Focus Loops read as clearly nested/inset within Practice Sections.
+- [x] Desktop YouTube neutral timeline: phrase/focus hierarchy establishes the accepted canonical Woodshed timeline language baseline.
+- [ ] Mobile upload + YouTube compact surfaces: hierarchy remains clear without clutter.
+- [ ] Regression: no perceived interaction behavior changes (Shift+drag, Practice/Edit protections, keyboard recovery, save/reload).
+
+Issues found in implementation/testing:
+
+- No automated test or typecheck regressions found in this pass.
+
+Remaining known gaps intentionally deferred:
+
+- Final cross-device manual visual tuning (especially color/contrast calibration by display profile) remains a QA sign-off step.
+- Internal lock/unlock alias naming cleanup remains deferred to the dedicated migration phase.
+
+### Phase 4B global timeline visual-system unification pass (2026-05-16)
+
+Status: **not complete**. Earlier baseline implementation landed, but uploaded-audio still reads as an editor-forward overlay system and does not yet meet canonical YouTube timeline visual philosophy.
+
+Files changed in this pass:
+
+- `lib/regions/region-visual-language.ts` (calmer canonical section/focus atmospheric tokens and lower overlay dominance defaults)
+- `lib/wavesurfer-region-appearance.ts` (uploaded-audio Practice Section + Focus Loop paint refinement to match canonical hierarchy semantics)
+- `lib/wavesurfer-region-appearance.test.ts` (expectation updates for refined focus frame rail widths/shadow weight)
+- `docs/GLOBAL_UX_UNIFICATION_TODO.md` (status reconciliation + this pass log)
+
+Implementation notes (Phase 4B, baseline):
+
+- Uploaded-audio Practice Sections were softened (lighter alpha, thinner rails, lower glow/drop weight), but they still read too much like tinted waveform overlays rather than atmospheric containers.
+- Focus Loops were tuned toward inset/nested framing, but they still read as generic highlighted regions in several real-world timeline states.
+- Shared visual-state derivation architecture remains unchanged (`deriveRegionVisualState` still drives active/foreground/editability semantics across renderers).
+- No playback/interaction/schema behavior was changed (Shift+drag creation, lock/edit posture, save/reload, restart, zoom/pan remain on existing logic).
+- Canonical design reference remains YouTube/Neutral timeline (cinematic, atmospheric, hierarchy-led). Upload-side rendering still needs another visual pass to reach perceptual parity.
+
+Tests run:
+
+- `npm test -- lib/wavesurfer-region-appearance.test.ts lib/regions/region-visual-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts lib/youtube/youtube-dexie-project.test.ts`
+- `npx tsc --noEmit`
+
+Manual QA checklist (Phase 4B visual-system unification):
+
+- [ ] Desktop uploaded audio: Practice Sections feel atmospheric/ambient rather than opaque blocks.
+- [ ] Desktop uploaded audio: Focus Loops read as inset/nested inside Practice Sections.
+- [ ] Desktop uploaded audio: waveform readability is preserved while hierarchy leads visually.
+- [ ] Desktop YouTube + uploaded audio: perceptual family resemblance is clear without requiring pixel-identical rendering.
+- [ ] Mobile upload + YouTube compact surfaces: hierarchy remains clear without clutter.
+- [ ] Regression: no perceived interaction behavior changes (Shift+drag, Practice/Edit protections, keyboard recovery, save/reload, zoom/pan).
+
+Remaining known gaps intentionally deferred:
+
+- Final cross-device display-profile tuning (contrast/gamma calibration) is still required for sign-off.
+- Lock/unlock alias naming cleanup remains deferred to the dedicated migration phase.
+
+### Phase 4C upload atmospheric hierarchy pass (2026-05-16)
+
+Status: implementation pass complete; manual perceptual QA against YouTube canonical baseline remains required.
+
+Primary pass goals:
+
+- Practice Sections must read as ambient spatial containers (not waveform tint overlays).
+- Focus Loops must read as nested/inset targets within section hierarchy.
+- Waveform detail should become environmental texture; hierarchy should lead (`Practice Section -> Focus Loop -> waveform`).
+- Geometry must move further away from editor-like hard boxes toward calmer soft-edge cinematic framing.
+
+Non-goals (must not change):
+
+- Playback logic, restart behavior, schema/persistence contracts.
+- Shift+drag authoring behavior, lock/edit protections, and existing edit affordances.
+- WaveSurfer architecture rewrites.
+
+Files changed in this pass:
+
+- `lib/regions/region-visual-language.ts` (further reduced section/focus paint intensity + calmer canonical frame rails for atmospheric hierarchy)
+- `lib/wavesurfer-region-appearance.ts` (softer section/focus geometry, deeper ambient scrims, lower hard-edge treatment, and stronger nested focus context)
+- `components/woodshed-workspace.tsx` (uploaded-audio waveform tint/progress subdued and waveform container chrome shifted toward cinematic ambient stage)
+- `lib/wavesurfer-region-appearance.test.ts` (expectation updates aligned to softened frame geometry/tokens)
+- `docs/GLOBAL_UX_UNIFICATION_TODO.md` (status reconciliation + this pass notes)
+
+Implementation notes (Phase 4C):
+
+- Practice Section rendering was moved further from overlay-block framing toward atmospheric containers via softer edges, larger corner radius, and top/bottom ambient scrims that stage the section as space rather than tint.
+- Focus Loop rendering was tuned to read as embedded targets through reduced hard-rail width, calmer frame contrast, and stronger interior depth cues in front/context states.
+- Waveform visual prominence was reduced (darker base waveform + less assertive progress tint) so hierarchy reads in the intended order: Practice Section -> Focus Loop -> waveform detail.
+- Shared region-state derivation (`deriveRegionVisualState`) and all interaction pathways remained unchanged; this was a paint/chrome-only pass.
+
+Root-cause findings from post-pass debugging:
+
+- Canonical neutral visual resolvers (`resolveNeutralSectionChrome`, `resolveNeutralFocusChrome`) were only consumed by the synthetic YouTube timeline path; WaveSurfer used a parallel paint stack (separate fill palette + shadow recipes), producing persistent visual drift.
+- WaveSurfer region elements are mounted in the renderer shadow tree, so `app/globals.css` selector changes were not the primary control surface for uploaded-audio regions.
+- Uploaded-audio waveform shell/chrome and wave/progress colors were still configured independently from neutral timeline visual baselines in `woodshed-workspace.tsx`.
+
+Follow-up implementation (same phase):
+
+- WaveSurfer phrase/focus inline paint now consumes canonical neutral chrome resolvers directly (same visual-language source as YouTube synthetic regions).
+- Uploaded-audio waveform shell/chrome and wave/progress colors were aligned to synthetic baseline contrast ladder while preserving real waveform detail.
+- Legacy uploaded-only palette dominance was neutralized for focus fills (palette still available for subtle rail variation; no longer drives blocky fill identity).
+
+Tests run:
+
+- `npm test -- lib/wavesurfer-region-appearance.test.ts lib/regions/region-visual-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts lib/youtube/youtube-dexie-project.test.ts`
+- `npx tsc --noEmit`
+
+Manual QA checklist (Phase 4C upload atmospheric hierarchy):
+
+- [ ] Desktop uploaded audio: Practice Sections read as atmospheric containers, not tinted waveform overlays.
+- [ ] Desktop uploaded audio: Focus Loops read as embedded/nested targets, not generic highlight blocks.
+- [ ] Desktop uploaded audio: waveform detail is visually secondary while remaining legible.
+- [ ] YouTube + uploaded audio: emotional/design-language parity is clear without pixel identity.
+- [ ] Mobile upload + YouTube compact surfaces: hierarchy remains calm/clear without visual clutter.
+- [ ] Regression: no behavior changes in Shift+drag, Practice/Edit protections, restart, save/reload, zoom/pan.
+
+Remaining gaps / risks:
+
+- Perceptual sign-off is still pending real-device cross-display calibration (gamma/contrast profiles can skew subtle scrim reads).
+- Additional micro-tuning may still be required for edge cases where very dense wave peaks compete with focus inset cues.
+
+### Phase 4D uploaded final playhead/readability parity pass (2026-05-16)
+
+Status: implementation complete; final manual screenshot QA pending.
+
+Scope of this pass:
+
+- Add YouTube-style warm vertical playhead to uploaded-audio WaveSurfer.
+- Increase uploaded waveform highlight readability while preserving canonical dark neutral baseline.
+
+Root cause (playhead drift):
+
+- The prior warm playhead used duplicated overlay coordinate math (`currentTime`, zoom scale, gutters, scroll offsets) rather than the renderer’s actual progress/cursor position.
+- Under live zoom/pan/seek and shadow-DOM layout timing, that duplicated math could diverge by a few pixels from WaveSurfer’s own render state.
+
+Architecture change (single source of truth):
+
+- Removed the custom light-DOM playhead coordinate computation.
+- Promoted WaveSurfer’s native cursor (`::part(cursor)`) to be the canonical warm playhead so cursor + progress boundary always share renderer-owned coordinates.
+- Added cursor-targeted drag-scrub wiring (`installWaveformCursorScrubGesture`) that only activates on the cursor hit target and drives seek/time through existing WaveSurfer playback surface APIs.
+
+Debug note (WaveSurfer cursor reality check):
+
+- In the current WaveSurfer build, native cursor/progress elements are real inside the renderer shadow DOM (`<div class="cursor" part="cursor">`, `<div class="progress" part="progress">`).
+- The initial `::part(cursor)` pass failed visually because the selector targeted the parent container (`[data-testid="primary-waveform"]`) rather than the actual WaveSurfer shadow host element, and options still set `cursorWidth: 0`/transparent cursor color.
+- Fix: mark the true shadow host (`data-ws-shadow-host="true"`), style `::part(cursor)` on that host, and keep native cursor width/color enabled.
+
+Why this fixes alignment:
+
+- Cursor position now comes from the same internal render source as waveform progress (no parallel X computation path).
+- Click-to-seek, playback progression, and cursor visualization all converge on WaveSurfer’s canonical time/render pipeline.
+
+Additional readability tuning in this pass:
+
+- Increased waveform and progress contrast (`waveColor`/`progressColor`) for faster temporal precision while preserving the dark cinematic baseline.
+- Kept Phase 4C shared visual-language region architecture intact (no reintroduction of legacy upload-only region palette dominance).
+
+Tests run:
+
+- `npm test -- lib/wavesurfer-region-appearance.test.ts lib/regions/region-visual-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts lib/youtube/youtube-dexie-project.test.ts`
+- `npx tsc --noEmit`
+
+Manual QA checklist (Phase 4D final parity):
+
+- [ ] Uploaded audio: warm WaveSurfer-native playhead matches YouTube style and stays aligned during play/pause/seek.
+- [ ] Uploaded audio: playhead/progress/clicked seek location remain pixel-aligned during pan/zoom/scroll at multiple scales.
+- [ ] Uploaded audio: dragging the playhead scrubs accurately without drift.
+- [ ] Uploaded audio: waveform is brighter/more legible inside active Practice Section and Focus Loop states.
+- [ ] Uploaded audio + YouTube: shared timeline family resemblance remains intact (real waveform vs synthetic bars only major difference).
+- [ ] Regression: region drag/resize/select/edit, shift-authoring, looping, and keyboard playback interactions remain unchanged.
+
+### Phase 4E timeline visual refinement + parity pass (2026-05-16)
+
+Status: second-pass implementation complete; manual QA sign-off pending.
+
+Scope goals for this pass:
+
+- Mirror Focus Loop label placement with Practice Section header language (no in-body annotation feel).
+- Bring uploaded-audio timeline visuals to the same canonical system already established in neutral/YouTube timeline.
+- Improve Focus Loop nested/inset depth cues while preserving waveform readability and performance.
+- Strengthen active vs inactive hierarchy and add restrained hover polish without behavior changes.
+
+Audit findings captured before implementation:
+
+- Focus Loop naming in `components/neutral-timeline/neutral-timeline-prototype.tsx` is currently rendered in the body interaction plate (`Drag Focus Loop` / `Select Focus Loop` buttons), making it read like temporary annotation text instead of a first-class object header.
+- Practice Section naming already lives in a dedicated top strip in the same renderer, so section vs focus label hierarchy is currently inconsistent within one timeline.
+- Canonical visual tokens exist in `lib/regions/region-visual-language.ts`, but renderer paint logic still includes local branch-specific tuning in both neutral timeline and WaveSurfer appearance paths.
+- Uploaded-audio WaveSurfer still carries stronger renderer-local edge/glow composition in `lib/wavesurfer-region-appearance.ts`, which can drift perceptually from neutral/YouTube hierarchy despite shared state derivation.
+- Shared behavior derivation remains correctly centralized (`deriveRegionVisualState`), so this pass should remain paint/chrome-only and must not alter interaction law.
+
+Implementation checklist (Phase 4E):
+
+- [x] Reconcile roadmap + TODO docs before code changes.
+- [x] Move Focus Loop labels to a top-edge/header treatment mirroring Practice Section hierarchy while preserving handle hit targets.
+- [x] Ensure Focus Loop labels remain readable at small widths and always visible on mobile.
+- [x] Consolidate section/focus visual tokens into canonical helpers where duplicated renderer-local paint logic exists.
+- [x] Tune Focus Loop nested/inset treatment (darker interior, tighter edge definition, subtle inset shadow) with restrained intensity.
+- [x] Reduce inactive glow/border intensity while preserving active clarity and focus direction.
+- [x] Add subtle hover polish (border + label brightening, ~100-150ms easing, no scale/bounce).
+- [x] Refine depth layering between waveform, Practice Sections, Focus Loops, and playhead; keep glow containment clean.
+- [x] Verify no behavior/persistence/playback regressions and no zoom/scrub performance degradation (automated focused tests + typecheck; manual performance QA still required).
+
+Manual QA checklist (Phase 4E):
+
+- [ ] Practice Section labels remain correct.
+- [ ] Focus Loop labels render in top-edge/header position across zoom levels.
+- [ ] Mobile label readability remains intact for Practice Sections and Focus Loops.
+- [ ] Hover response is subtle and premium (no flashy motion).
+- [ ] Uploaded audio and YouTube timelines read as one visual system.
+- [ ] Active/inactive hierarchy is clearer without excessive contrast.
+- [ ] Waveform readability remains intact in dense and sparse sections.
+- [ ] No regressions in Shift+drag, drag/resize, restart, play/pause, seek, zoom, pan, or scrub.
+
+### Phase 4F uploaded-audio playhead motion smoothness parity (2026-05-16)
+
+Status: implementation complete; manual QA sign-off pending.
+
+Problem statement:
+
+- YouTube timeline playhead appears smooth/gliding.
+- Uploaded-audio WaveSurfer playhead remains position-correct but feels stepped/choppy.
+
+Audit findings captured before implementation:
+
+- YouTube path (`components/youtube-workspace.tsx`) drives `currentTime` via a dedicated playback `requestAnimationFrame` loop while playing, so the synthetic timeline playhead receives frame-rate clock updates.
+- Uploaded-audio path (`components/woodshed-workspace.tsx`) currently relies on WaveSurfer’s native cursor paint cadence; workspace-level `currentTime` updates are intentionally throttled (`PLAYHEAD_UI_TIME_MS`) for transport/minimap and are not used to animate the visual cursor.
+- Current upload playhead alignment is correct after Phase 4D (native cursor promoted as source of truth), but motion smoothness can still differ perceptually from YouTube because visual updates are delegated to WaveSurfer-native cursor progression.
+- Existing constraints remain mandatory: no playback/timing/persistence/loop behavior changes and no reintroduction of drift-prone independent overlay math.
+
+Implementation checklist (Phase 4F):
+
+- [x] Reconcile docs and record audit findings before code changes.
+- [x] Add a frame-smooth visual playhead path for uploaded audio driven from canonical audio currentTime.
+- [x] Keep position locked to WaveSurfer viewport coordinates and reconcile cleanly on seek/pause/restart/loop warps.
+- [x] Preserve existing cursor drag-scrub interaction and avoid duplicate competing playhead visuals.
+- [x] Leave YouTube playhead behavior unchanged (except shared helper extraction if beneficial).
+- [x] Run focused tests + typecheck.
+
+Manual QA checklist (Phase 4F):
+
+- [ ] Uploaded audio: smooth playhead motion at normal speed.
+- [ ] Uploaded audio: smooth playhead motion at slower tempos.
+- [ ] Uploaded audio: smooth motion during loop playback (Practice Section + Focus Loop).
+- [ ] Uploaded audio: no drift while heavily zoomed and after pan/scroll.
+- [ ] Uploaded audio: seek click, cursor drag scrub, pause, restart, and loop reset snap correctly.
+- [ ] Side-by-side parity check: uploaded and YouTube timelines feel motion-consistent.
+
+Second-pass implementation notes:
+
+- Uploaded-audio visual playhead now updates via direct DOM `transform: translate3d(...)` writes in a playback RAF loop, using live media time (`readPlaybackSeconds`) rather than throttled store time.
+- Position mapping is centralized through `waveformViewportPlayheadX` (`lib/playhead-sync.ts`) and keeps subpixel precision (no integer clamping/rounding on each frame).
+- Native WaveSurfer cursor remains as interaction anchor but is visually de-emphasized under overlay mode to avoid dual-cursor shimmer.
+- Drag semantics are now mode-split on uploaded waveform:
+  - Practice Mode -> drag pans waveform.
+  - Edit Mode -> drag scrubs playhead (except when region handles/regions own interaction).
+  - Shift+drag remains reserved for authoring.
+
+### Phase 4G Practice/Edit mode control unification (2026-05-16)
+
+Status: complete (manual QA confirmed on uploaded-audio + YouTube; regression tests added).
+
+Problem statement:
+
+- YouTube desktop transport currently shows a non-clickable mode text pill plus a separate lock icon button.
+- Uploaded-audio desktop transport primarily exposes the lock icon affordance.
+- The split control surface weakens Practice/Edit language clarity and creates cross-surface inconsistency.
+
+Audit findings captured before implementation:
+
+- Both YouTube and uploaded-audio desktop flows render through the shared `DesktopTransportBar`, but mode state presentation is split between `interactionModeChip` (read-only text) and `onToggleEditContext` lock icon button.
+- YouTube passes explicit `interactionModeChip.editingEnabled`; uploaded-audio currently does not pass that explicit mode chip state.
+- Existing mode transition behavior is already shared and stable (`resolvePracticeEditCompatibility`, explicit transport mode toggle handlers), so this pass should be control-surface-only.
+
+Implementation checklist (Phase 4G):
+
+- [x] Reconcile docs and record audit findings before code changes.
+- [x] Replace standalone lock icon with one clickable Practice/Edit mode pill in `DesktopTransportBar`.
+- [x] Ensure YouTube and uploaded-audio both pass explicit mode state into the same pill control.
+- [x] Keep existing mode transition behavior unchanged (control-surface swap only).
+- [x] Ensure accessible button semantics (focus ring, aria-label/title with next action).
+- [x] Verify no duplicate lock/unlock icon controls remain in desktop timeline transport.
+
+Manual QA checklist (Phase 4G):
+
+- [x] Uploaded audio desktop: one clickable Practice/Edit pill (no standalone lock icon).
+- [x] YouTube desktop: same clickable Practice/Edit pill (no standalone lock icon).
+- [x] Practice visual treatment remains calm green; Edit treatment remains clear but restrained.
+- [x] Pill toggles mode correctly and reflects current mode at a glance.
+- [x] Shift+drag authoring and region edit behavior remain intact.
+- [x] Mobile layouts remain clean (no control overlap/regression).
+
+Follow-up regression coverage:
+
+- [x] Shared toggle helper tests cover Practice/Edit pill mode symmetry across phrase/focus contexts.
+- [x] Neutral timeline double-click now routes through shared symmetric toggles (Practice -> Edit -> Practice).
+- [x] Uploaded-audio transport path remains on same shared toggle/exit helpers as YouTube.
+
+Dev route QA note:
+
+- [x] `/dev/youtube-workspace` now mounts `YoutubeWorkspace` with `ssr: false` to avoid transient hydration mismatch noise from local persisted client state during QA.
+
+### Phase 4H default scrub + edge auto-pan gesture unification (2026-05-16)
+
+Status: implementation complete; manual QA sign-off pending.
+
+Problem statement:
+
+- Waveform click-drag currently has multiple competing mental models (pan-first in some paths, scrub-first in others).
+- Mode-specific split introduced complexity and still feels inconsistent.
+- Desired interaction has changed: drag should scrub by default, with edge-driven auto-pan while dragging.
+
+Audit findings captured before implementation:
+
+- Uploaded-audio desktop currently routes through `installWaveformPanGesture` and separate cursor-specific scrub handling (`installWaveformCursorScrubGesture`), creating overlap and conflict potential.
+- Neutral timeline (YouTube/synthetic path) still uses `Gesture.mode === "pan"` for strip drag, not default scrub.
+- Shift+drag focus/phrase authoring and region-level pointer priority logic already exist and should remain authoritative.
+
+Implementation checklist (Phase 4H):
+
+- [x] Reconcile docs and record audit findings before code changes.
+- [x] Uploaded-audio waveform: make click+drag default to scrub with edge auto-pan (no drag-pan primary mode).
+- [x] Neutral/YouTube timeline: align equivalent drag behavior to scrub + edge auto-pan.
+- [x] Keep single-click seek semantics in both surfaces.
+- [x] Preserve Shift+drag authoring priority and region handle/resize/move priority.
+- [x] Keep mobile/touch behavior unchanged unless intentionally updated.
+- [x] Run typecheck + focused tests.
+
+Implementation notes (Phase 4H):
+
+- Uploaded-audio gesture path (`installWaveformPanGesture`) now treats drag as scrub by default and drives continuous edge auto-pan while pointer remains near/beyond viewport edges.
+- Auto-pan executes on RAF during active drag and recalculates scrub time against live scroll position, allowing continuous scrub through zoomed timelines without pointer release.
+- Cursor-specific scrub hook was removed from active wiring to avoid dual gesture ownership conflicts; one unified background drag handler now owns drag scrub semantics.
+- Neutral timeline background drag now uses the same scrub-first + edge auto-pan model, replacing the previous pan-first strip drag behavior.
+- Existing priority rules were preserved: Shift+drag authoring first, region/handle interactions first, then background scrub.
+
+Manual QA checklist (Phase 4H):
+
+- [ ] Uploaded audio: click+drag scrubs by default.
+- [ ] Uploaded audio: dragging to left/right edge auto-pans while scrubbing.
+- [ ] Uploaded audio: heavily zoomed waveform can be scrubbed continuously without releasing pointer.
+- [ ] Uploaded audio: single-click seek still works.
+- [ ] Uploaded audio: Shift+drag focus creation still works.
+- [ ] Uploaded audio: region edit/resize/move still works in Edit Mode.
+- [ ] YouTube/synthetic timeline: drag behavior matches scrub + edge auto-pan expectation.
+- [ ] Mobile behavior unchanged/no regression.
+
+### Phase 4I uploaded playhead timing parity + shared top ruler (2026-05-16)
+
+Status: implementation complete; manual QA sign-off pending.
+
+Scope goals:
+
+- Make uploaded-audio playhead motion follow the same frame-timed visual model as YouTube (smooth under high zoom).
+- Add uploaded-audio top time ruler parity with YouTube timeline ruler styling and behavior.
+
+Implementation notes:
+
+- Uploaded-audio visual playhead clock now uses a frame loop with safe anchored-time interpolation:
+  - captures confirmed media `currentTime` + `performance.now`
+  - estimates visual time between samples while playing
+  - hard-resyncs on pause/finish/zoom/scroll and on drift/backward-jump thresholds
+- Playhead position is still written via direct DOM `translate3d(...)` with subpixel precision and no X transition.
+- Native WaveSurfer cursor under overlay mode remains visually de-emphasized so the overlay reads as the sole playhead.
+- Added shared `TimeRuler` component (`components/timeline/time-ruler.tsx`) and wired it into:
+  - neutral/YouTube timeline ruler rendering
+  - uploaded-audio waveform shell as a new top ruler bar
+- Uploaded-audio ruler uses live WaveSurfer scroll/zoom metrics and gutter-aware offset mapping for alignment.
+
+Manual QA checklist (Phase 4I):
+
+- [ ] Uploaded audio: playhead smoothness matches YouTube at normal zoom.
+- [ ] Uploaded audio: playhead remains smooth at high zoom and slower playback speeds.
+- [ ] Uploaded audio: no drift after seek/restart/pause/loop reset/zoom/pan.
+- [ ] Uploaded audio: top ruler ticks/labels align at multiple zoom levels.
+- [ ] Uploaded audio: top ruler tracks horizontal scroll/pan accurately.
+- [ ] YouTube: ruler behavior and playhead smoothness remain unchanged.
+
+### Phase 4J uploaded transform-led playback-follow (2026-05-16)
+
+Status: implementation in progress (this pass); manual QA sign-off pending.
+
+Problem statement:
+
+- Fixed-playhead architecture is now correct, but uploaded-audio playback-follow still looks stepped under heavy zoom.
+- Root cause is likely per-frame `scrollLeft` writes used as the visible animation path.
+
+Audit findings captured before implementation:
+
+- Uploaded-audio follow currently computes correct target viewport lock but still drives visible motion with `scrollContainer.scrollLeft` writes inside playback RAF.
+- Browser scroll updates are layout-bound and can present quantized/stepped motion, especially when zoomed.
+- YouTube synthetic timeline reads smoother because motion is visually represented as compositor-friendly timeline movement with a stable playhead, not a visibly stepping cursor.
+- WaveSurfer DOM ownership confirms a translatable inner visual layer (`wrapper`) under a logical scroll host (`scrollContainer`), with regions rendered in the same visual plane.
+
+Implementation checklist (Phase 4J):
+
+- [x] Reconcile docs before this implementation pass.
+- [ ] Add transform-led uploaded playback follow (`baseScrollLeft + visualTranslateX`) with subpixel precision.
+- [ ] Keep `scrollLeft` as logical/layout anchor only (seek/pause/zoom/scrub/rebase/loop-reset checkpoints).
+- [ ] Move uploaded waveform visual layer and uploaded top ruler together under the same visual offset.
+- [ ] Keep fixed Woodshed playhead visually stable and aligned.
+- [ ] Flush/rebase transform into real `scrollLeft` before pointer/hit-test math on user interactions.
+- [ ] Preserve existing timing, region bounds, loop semantics, and persistence.
+- [ ] Run focused tests + typecheck.
+
+Manual QA checklist (Phase 4J):
+
+- [ ] Uploaded audio: waveform/timeline glides smoothly during playback at normal zoom.
+- [ ] Uploaded audio: smoothness holds at heavy zoom with no obvious stepping.
+- [ ] Uploaded audio: fixed playhead remains stable through play/pause/seek/restart.
+- [ ] Uploaded audio: time ruler remains aligned during playback and after rebases.
+- [ ] Uploaded audio: regions stay aligned and editable after pause/seek/scrub/zoom.
+- [ ] Uploaded audio: scrub + edge auto-pan works with no hit-test drift.
+- [ ] Uploaded audio: loop resets remain correct with no visible jump artifacts.
+- [ ] YouTube behavior remains unchanged.
+
 ## Phase 5 — Layout Hierarchy and Workflow Cohesion
 
 ### Goals
 
-- reinforce waveform dominance and contextual controls
+- reinforce practice hierarchy dominance and contextual controls
+- keep waveform detail readable but visually secondary to Practice Section/Focus Loop structure
 - reduce workflow friction without changing source-specific rendering identity
 
 ### Affected Systems/Components
@@ -562,7 +1000,7 @@ Remaining known gaps intentionally deferred:
 
 ### Completion Criteria
 
-- waveform remains dominant in both form factors
+- practice hierarchy remains dominant in both form factors
 - core practice workflow requires fewer context switches
 
 ## Phase 6 — Persistence, Compatibility, and Stabilization

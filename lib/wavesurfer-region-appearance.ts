@@ -7,6 +7,13 @@
  */
 
 import type { FocusRegionWaveSlot } from "@/lib/focus-region-wave-palette";
+import {
+  CANONICAL_FOCUS_FRAME,
+  CANONICAL_WAVE_SECTION_ALPHA,
+  resolveNeutralFocusChrome,
+  resolveNeutralSectionChrome,
+} from "@/lib/regions/region-visual-language";
+import { deriveRegionVisualState } from "@/lib/regions/region-visual-state";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 
 export type PhraseRegionTier = "locked" | "active" | "editing";
@@ -16,7 +23,29 @@ export function focusIsVisualFront(
   loopPracticeScope: LoopPracticeScope,
   phraseHasFocusRegions: boolean,
 ): boolean {
-  return loopPracticeScope === "practice_region" && phraseHasFocusRegions;
+  const state = deriveRegionVisualState({
+    context: {
+      surface: "desktop",
+      activeLoopId: "phrase",
+      activeSegmentId: "segment",
+      editableLoopId: null,
+      loopPlaybackEnabled: false,
+      loopPracticeScope,
+      phraseWaveformEditUnlockedById: {},
+      focusRegionWaveformEditUnlockedById: {},
+      practiceEditCompatibility: {
+        editMode: false,
+        practiceMode: true,
+      },
+    },
+    target: {
+      kind: "focus",
+      phraseId: "phrase",
+      segmentId: "segment",
+      phraseHasFocusRegions,
+    },
+  });
+  return state.isFocusForeground;
 }
 
 /** Loop Phrase mode (or no focus regions): phrase is the foreground practice frame. */
@@ -26,15 +55,6 @@ export function phraseIsVisualFront(
 ): boolean {
   return !focusIsVisualFront(loopPracticeScope, phraseHasFocusRegions);
 }
-
-const FOCUS_FRAME = [
-  { rim: "rgba(188, 178, 222, 0.98)", rail: "rgba(206, 194, 236, 0.94)" },
-  { rim: "rgba(172, 188, 224, 0.98)", rail: "rgba(190, 208, 242, 0.94)" },
-  { rim: "rgba(198, 182, 228, 0.98)", rail: "rgba(214, 200, 244, 0.94)" },
-  { rim: "rgba(172, 194, 218, 0.98)", rail: "rgba(196, 216, 236, 0.94)" },
-  { rim: "rgba(206, 186, 206, 0.98)", rail: "rgba(222, 202, 224, 0.94)" },
-  { rim: "rgba(176, 200, 192, 0.98)", rail: "rgba(200, 224, 216, 0.94)" },
-] as const;
 
 function dimRgbaString(rgba: string, factor: number): string {
   const m = rgba.match(
@@ -46,7 +66,7 @@ function dimRgbaString(rgba: string, factor: number): string {
 }
 
 function focusFrameDimmed(
-  p: (typeof FOCUS_FRAME)[number],
+  p: (typeof CANONICAL_FOCUS_FRAME)[number],
   factor: number,
 ): { rim: string; rail: string } {
   return { rim: dimRgbaString(p.rim, factor), rail: dimRgbaString(p.rail, factor) };
@@ -54,7 +74,47 @@ function focusFrameDimmed(
 
 function clampPalette(paletteIndex: number): number {
   if (!Number.isFinite(paletteIndex) || paletteIndex < 0) return 0;
-  return paletteIndex % FOCUS_FRAME.length;
+  return paletteIndex % CANONICAL_FOCUS_FRAME.length;
+}
+
+function phraseZIndexFromTier(tier: PhraseRegionTier, focusForeground: boolean): string {
+  if (focusForeground) {
+    return "2";
+  }
+  if (tier === "editing") return "8";
+  return "7";
+}
+
+function desktopFocusZIndexFromState(state: {
+  zIndexTier: string;
+}): string {
+  switch (state.zIndexTier) {
+    case "focus_editing_foreground":
+      return "10";
+    case "focus_active_foreground":
+      return "8";
+    case "focus_inactive_foreground":
+      return "6";
+    case "focus_editing_context":
+      return "5";
+    case "focus_active_context":
+      return "4";
+    default:
+      return "3";
+  }
+}
+
+function mobileReadonlyFocusZIndexFromState(state: { zIndexTier: string }): string {
+  switch (state.zIndexTier) {
+    case "focus_active_foreground":
+      return "4";
+    case "focus_inactive_foreground":
+      return "3";
+    case "focus_active_context":
+      return "2";
+    default:
+      return "1";
+  }
 }
 
 /** WaveSurfer `color` for phrase region — warm amber; stronger when phrase is the front layer. */
@@ -64,25 +124,45 @@ export function phraseRegionWaveColor(
   phraseIsFront: boolean,
 ): string {
   const hi = phraseIsFront;
-  if (isMobilePractice) {
-    if (tier === "locked") return hi ? "rgba(245, 190, 95, 0.11)" : "rgba(245, 190, 95, 0.07)";
-    if (tier === "active") return hi ? "rgba(245, 190, 95, 0.14)" : "rgba(245, 190, 95, 0.09)";
-    return hi ? "rgba(255, 205, 130, 0.16)" : "rgba(245, 190, 95, 0.10)";
-  }
-  if (tier === "locked") return hi ? "rgba(245, 190, 95, 0.10)" : "rgba(245, 190, 95, 0.06)";
-  if (tier === "active") return hi ? "rgba(245, 190, 95, 0.16)" : "rgba(245, 190, 95, 0.08)";
-  return hi ? "rgba(255, 210, 135, 0.18)" : "rgba(245, 190, 95, 0.10)";
+  const alpha = isMobilePractice
+    ? tier === "locked"
+      ? hi
+        ? CANONICAL_WAVE_SECTION_ALPHA.mobile.lockedFront
+        : CANONICAL_WAVE_SECTION_ALPHA.mobile.lockedContext
+      : tier === "active"
+        ? hi
+          ? CANONICAL_WAVE_SECTION_ALPHA.mobile.activeFront
+          : CANONICAL_WAVE_SECTION_ALPHA.mobile.activeContext
+        : hi
+          ? CANONICAL_WAVE_SECTION_ALPHA.mobile.editingFront
+          : CANONICAL_WAVE_SECTION_ALPHA.mobile.editingContext
+    : tier === "locked"
+      ? hi
+        ? CANONICAL_WAVE_SECTION_ALPHA.desktop.lockedFront
+        : CANONICAL_WAVE_SECTION_ALPHA.desktop.lockedContext
+      : tier === "active"
+        ? hi
+          ? CANONICAL_WAVE_SECTION_ALPHA.desktop.activeFront
+          : CANONICAL_WAVE_SECTION_ALPHA.desktop.activeContext
+        : hi
+          ? CANONICAL_WAVE_SECTION_ALPHA.desktop.editingFront
+          : CANONICAL_WAVE_SECTION_ALPHA.desktop.editingContext;
+  return `rgba(109, 93, 217, ${Number((alpha * 0.3).toFixed(4))})`;
 }
 
 /** WaveSurfer `color` for focus segments — cool palette; slightly dimmed when phrase is front. */
 export function focusRegionFillForWave(
-  slot: FocusRegionWaveSlot,
+  _slot: FocusRegionWaveSlot,
   selected: boolean,
   focusIsFront: boolean,
 ): string {
-  const src = selected ? slot.selectedFill : slot.inactiveFill;
-  if (focusIsFront) return src;
-  return dimRgbaString(src, 0.78);
+  const chrome = resolveNeutralFocusChrome({
+    active: selected,
+    chipHover: false,
+    dimmed: !selected && !focusIsFront,
+    calm: !selected && !focusIsFront,
+  });
+  return chrome.backgroundColor;
 }
 
 export function phraseRegionBoxShadow(
@@ -90,107 +170,22 @@ export function phraseRegionBoxShadow(
   isMobilePractice: boolean,
   phraseIsFront: boolean,
 ): string {
-  const f = phraseIsFront;
-  if (isMobilePractice) {
-    if (tier === "locked") {
-      return f
-        ? [
-            "inset 0 0 0 1px rgba(255, 214, 130, 0.48)",
-            "inset 0 0 0 2px rgba(8, 7, 6, 0.44)",
-            "inset 0 0 52px rgba(90, 50, 10, 0.05)",
-          ].join(", ")
-        : [
-            "inset 0 0 0 1px rgba(200, 160, 90, 0.32)",
-            "inset 0 0 0 2px rgba(8, 7, 6, 0.42)",
-            "inset 0 0 52px rgba(15, 23, 42, 0.03)",
-          ].join(", ");
-    }
-    if (tier === "active") {
-      return f
-        ? [
-            "inset 3px 0 0 0 rgba(255, 210, 150, 0.75)",
-            "inset -3px 0 0 0 rgba(255, 210, 150, 0.75)",
-            "inset 0 1px 0 0 rgba(255, 228, 180, 0.28)",
-            "inset 0 -1px 0 0 rgba(255, 228, 180, 0.22)",
-            "0 0 0 1px rgba(120, 80, 30, 0.35)",
-            "0 0 16px rgba(230, 150, 50, 0.12)",
-          ].join(", ")
-        : [
-            "inset 2px 0 0 0 rgba(220, 175, 100, 0.45)",
-            "inset -2px 0 0 0 rgba(220, 175, 100, 0.45)",
-            "0 0 0 1px rgba(90, 65, 30, 0.28)",
-          ].join(", ");
-    }
-    return f
-      ? [
-          "inset 3px 0 0 0 rgba(255, 220, 160, 0.88)",
-          "inset -3px 0 0 0 rgba(255, 220, 160, 0.88)",
-          "inset 0 1px 0 0 rgba(255, 235, 200, 0.22)",
-          "inset 0 -1px 0 0 rgba(255, 235, 200, 0.18)",
-          "inset 0 0 0 1px rgba(10, 9, 8, 0.42)",
-          "inset 0 0 88px rgba(200, 120, 30, 0.04)",
-          "0 0 0 1px rgba(140, 95, 40, 0.38)",
-          "0 0 14px rgba(240, 160, 50, 0.14)",
-        ].join(", ")
-      : [
-          "inset 2px 0 0 0 rgba(210, 170, 95, 0.55)",
-          "inset -2px 0 0 0 rgba(210, 170, 95, 0.55)",
-          "inset 0 0 0 1px rgba(10, 9, 8, 0.4)",
-          "0 0 10px rgba(0, 0, 0, 0.22)",
-        ].join(", ");
-  }
-  if (tier === "locked") {
-    return f
-      ? [
-          "inset 0 0 0 1px rgba(255, 214, 130, 0.52)",
-          "inset 0 0 0 2px rgba(8, 7, 6, 0.5)",
-          "inset 0 0 44px rgba(100, 55, 12, 0.05)",
-          "0 0 0 1px rgba(50, 36, 12, 0.32)",
-          "0 0 12px rgba(220, 140, 40, 0.1)",
-        ].join(", ")
-      : [
-          "inset 0 0 0 1px rgba(200, 165, 95, 0.28)",
-          "inset 0 0 0 2px rgba(8, 7, 6, 0.48)",
-          "inset 0 0 44px rgba(15, 23, 42, 0.02)",
-        ].join(", ");
-  }
-  if (tier === "active") {
-    return f
-      ? [
-          "inset 2px 0 0 0 rgba(255, 205, 130, 0.62)",
-          "inset -2px 0 0 0 rgba(255, 205, 130, 0.62)",
-          "inset 0 1px 0 0 rgba(255, 224, 170, 0.18)",
-          "inset 0 -1px 0 0 rgba(255, 224, 170, 0.14)",
-          "inset 0 0 0 1px rgba(12, 10, 9, 0.44)",
-          "inset 0 0 96px rgba(200, 110, 20, 0.04)",
-          "0 0 0 1px rgba(70, 50, 18, 0.38)",
-          "0 0 18px rgba(230, 150, 55, 0.14)",
-        ].join(", ")
-      : [
-          "inset 1px 0 0 0 rgba(210, 170, 95, 0.35)",
-          "inset -1px 0 0 0 rgba(210, 170, 95, 0.35)",
-          "inset 0 0 0 1px rgba(12, 10, 9, 0.4)",
-          "inset 0 0 72px rgba(80, 45, 10, 0.03)",
-        ].join(", ");
-  }
-  return f
-    ? [
-        "inset 3px 0 0 0 rgba(255, 220, 155, 0.88)",
-        "inset -3px 0 0 0 rgba(255, 220, 155, 0.88)",
-        "inset 0 1px 0 0 rgba(255, 232, 190, 0.22)",
-        "inset 0 -1px 0 0 rgba(255, 232, 190, 0.18)",
-        "inset 0 0 0 1px rgba(10, 9, 8, 0.42)",
-        "inset 0 0 96px rgba(210, 125, 25, 0.05)",
-        "0 0 0 1px rgba(90, 62, 22, 0.4)",
-        "0 0 16px rgba(240, 155, 45, 0.16)",
-      ].join(", ")
-    : [
-        "inset 2px 0 0 0 rgba(215, 175, 100, 0.5)",
-        "inset -2px 0 0 0 rgba(215, 175, 100, 0.5)",
-        "inset 0 0 0 1px rgba(10, 9, 8, 0.4)",
-        "inset 0 0 88px rgba(120, 70, 15, 0.03)",
-        "0 0 10px rgba(0, 0, 0, 0.28)",
-      ].join(", ");
+  const editing = tier === "editing";
+  const active = tier !== "locked";
+  const depth = phraseIsFront ? 0.2 : 0.16;
+  const edge = active ? 0.2 : 0.11;
+  const rail = editing ? 2 : active ? 1 : 0;
+  return [
+    rail > 0 ? `inset ${rail}px 0 0 0 rgba(167, 139, 250, ${editing ? 0.31 : 0.18})` : "",
+    rail > 0 ? `inset -${rail}px 0 0 0 rgba(167, 139, 250, ${editing ? 0.31 : 0.18})` : "",
+    `inset 0 0 0 1px rgba(167, 139, 250, ${edge})`,
+    "inset 0 1px 0 rgba(255, 255, 255, 0.035)",
+    `inset 0 -20px 40px rgba(0, 0, 0, ${depth})`,
+    `inset 0 10px 22px rgba(118, 96, 186, ${phraseIsFront ? 0.036 : 0.022})`,
+    `0 1px 7px rgba(0, 0, 0, ${isMobilePractice ? 0.16 : 0.2})`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 export function applyPhraseRegionVisuals(
@@ -200,15 +195,24 @@ export function applyPhraseRegionVisuals(
   loopPracticeScope: LoopPracticeScope,
   phraseHasFocusRegions: boolean,
 ): void {
-  const phraseFront = phraseIsVisualFront(loopPracticeScope, phraseHasFocusRegions);
-  const z =
-    phraseFront && tier === "editing"
-      ? "8"
-      : phraseFront
-        ? "7"
-        : "2";
-  el.style.zIndex = z;
-  el.style.borderRadius = "2px";
+  const focusForeground = focusIsVisualFront(
+    loopPracticeScope,
+    phraseHasFocusRegions,
+  );
+  const phraseFront = !focusForeground;
+  const sectionChrome = resolveNeutralSectionChrome({
+    active: tier !== "locked",
+    calm: tier === "locked",
+  });
+  const laneScrim = phraseHasFocusRegions
+    ? "linear-gradient(to bottom, rgba(4, 3, 8, 0.18) 0%, rgba(10, 9, 14, 0.1) 24%, rgba(10, 9, 14, 0.04) 39%, rgba(10, 9, 14, 0.04) 64%, rgba(10, 9, 14, 0.11) 80%, rgba(4, 3, 8, 0.18) 100%)"
+    : "linear-gradient(to bottom, rgba(4, 3, 8, 0.13), rgba(4, 3, 8, 0.06))";
+  el.style.zIndex = phraseZIndexFromTier(tier, focusForeground);
+  el.style.borderRadius = "8px";
+  el.style.borderStyle = "solid";
+  el.style.borderWidth = "1px";
+  el.style.borderColor = sectionChrome.borderColor;
+  el.style.background = `${laneScrim}, ${sectionChrome.background}`;
   el.style.boxShadow = phraseRegionBoxShadow(tier, isMobilePractice, phraseFront);
 }
 
@@ -219,95 +223,61 @@ export function desktopFocusRegionBoxShadow(
   editable: boolean,
   focusIsFront: boolean,
 ): string {
-  const pRaw = FOCUS_FRAME[clampPalette(paletteIndex)];
-  const p = focusIsFront ? pRaw : focusFrameDimmed(pRaw, 0.88);
-  const rim = p.rim;
+  const pRaw = CANONICAL_FOCUS_FRAME[clampPalette(paletteIndex)];
+  const p = focusIsFront ? pRaw : focusFrameDimmed(pRaw, 0.82);
   const rail = p.rail;
-
-  const edge = focusIsFront ? 0.78 : 0.72;
-  const drop = focusIsFront ? 0.58 : 0.48;
-  const vignette = focusIsFront ? 0.15 : 0.11;
-
-  const baseDepth = [
-    `inset 0 0 0 1px ${rim}`,
-    `inset 0 0 0 2px rgba(5, 4, 3, ${edge})`,
-    "inset 0 2px 4px rgba(255, 255, 255, 0.1)",
-    `inset 0 -14px 30px rgba(0, 0, 0, ${vignette})`,
-    `0 0 0 1px rgba(16, 14, 12, ${focusIsFront ? 0.55 : 0.45})`,
-    `0 1px 6px rgba(0, 0, 0, ${drop})`,
-  ];
+  const chrome = resolveNeutralFocusChrome({
+    active: selected,
+    chipHover: false,
+    hovered: false,
+    dimmed: !selected && !focusIsFront,
+    calm: !selected && !editable,
+  });
 
   if (!selected) {
-    return baseDepth.join(", ");
+    return [
+      chrome.shadow,
+      `inset 0 0 0 1px ${chrome.borderColor}`,
+      "inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+      `inset 0 -14px 28px rgba(0, 0, 0, ${focusIsFront ? 0.15 : 0.12})`,
+      `0 1px 6px rgba(0, 0, 0, ${focusIsFront ? 0.21 : 0.17})`,
+    ].join(", ");
   }
 
-  const rails = editable
-    ? [
-        `inset 5px 0 0 0 ${rail}`,
-        `inset -5px 0 0 0 ${rail}`,
-        "inset 0 3px 6px rgba(255, 255, 255, 0.12)",
-        `inset 0 -16px 36px rgba(0, 0, 0, ${focusIsFront ? 0.2 : 0.15})`,
-      ]
-    : [
-        `inset 4px 0 0 0 ${rail}`,
-        `inset -4px 0 0 0 ${rail}`,
-        "inset 0 2px 6px rgba(255, 255, 255, 0.11)",
-        `inset 0 -14px 34px rgba(0, 0, 0, ${focusIsFront ? 0.19 : 0.14})`,
-      ];
-
-  const glow = focusIsFront ? "0 0 28px rgba(130, 110, 200, 0.16)" : "0 0 20px rgba(100, 90, 150, 0.1)";
-
-  const frame = [
-    "inset 0 0 0 1px rgba(252, 248, 255, 0.96)",
-    `inset 0 0 0 2px rgba(5, 4, 3, ${focusIsFront ? 0.68 : 0.6})`,
-    ...rails,
-    `0 0 0 1px rgba(18, 16, 14, ${focusIsFront ? 0.62 : 0.5})`,
-    `0 2px 12px rgba(0, 0, 0, ${focusIsFront ? 0.52 : 0.42})`,
-    glow,
-  ];
-  return frame.join(", ");
+  const railWidth = editable ? 3 : 2;
+  return [
+    chrome.shadow,
+    `inset ${railWidth}px 0 0 0 ${rail}`,
+    `inset -${railWidth}px 0 0 0 ${rail}`,
+    `inset 0 0 0 1px ${chrome.borderColor}`,
+    "inset 0 1px 0 rgba(255, 255, 255, 0.07)",
+    `inset 0 -18px 34px rgba(0, 0, 0, ${focusIsFront ? 0.23 : 0.18})`,
+    "inset 0 0 0 2px rgba(255, 255, 255, 0.02)",
+    `0 2px 10px rgba(0, 0, 0, ${focusIsFront ? 0.28 : 0.22})`,
+  ].join(", ");
 }
 
 export function mobileReadonlyFocusBoxShadow(
   selected: boolean,
   focusIsFront: boolean,
 ): string {
-  const strong = focusIsFront;
-  if (!selected) {
-    return strong
-      ? [
-          "inset 0 0 0 1px rgba(148, 156, 188, 0.52)",
-          "inset 0 0 0 2px rgba(8, 7, 6, 0.52)",
-          "inset 0 -10px 22px rgba(0, 0, 0, 0.1)",
-          "0 0 0 1px rgba(14, 12, 11, 0.4)",
-          "0 1px 5px rgba(0, 0, 0, 0.45)",
-        ].join(", ")
-      : [
-          "inset 0 0 0 1px rgba(130, 138, 160, 0.38)",
-          "inset 0 0 0 2px rgba(8, 7, 6, 0.46)",
-          "inset 0 -10px 22px rgba(0, 0, 0, 0.08)",
-          "0 0 0 1px rgba(14, 12, 11, 0.32)",
-          "0 1px 4px rgba(0, 0, 0, 0.35)",
-        ].join(", ");
-  }
-  return strong
-    ? [
-        "inset 0 0 0 1px rgba(222, 212, 250, 0.72)",
-        "inset 0 0 0 2px rgba(8, 7, 6, 0.48)",
-        "inset 3px 0 0 0 rgba(196, 181, 253, 0.58)",
-        "inset -3px 0 0 0 rgba(196, 181, 253, 0.58)",
-        "0 0 0 1px rgba(14, 12, 11, 0.48)",
-        "0 2px 10px rgba(0, 0, 0, 0.42)",
-        "0 0 18px rgba(130, 110, 200, 0.12)",
-      ].join(", ")
-    : [
-        "inset 0 0 0 1px rgba(190, 182, 215, 0.48)",
-        "inset 0 0 0 2px rgba(8, 7, 6, 0.44)",
-        "inset 2px 0 0 0 rgba(170, 158, 210, 0.42)",
-        "inset -2px 0 0 0 rgba(170, 158, 210, 0.42)",
-        "0 0 0 1px rgba(14, 12, 11, 0.36)",
-        "0 1px 6px rgba(0, 0, 0, 0.34)",
-      ].join(", ");
+  const chrome = resolveNeutralFocusChrome({
+    active: selected,
+    chipHover: false,
+    hovered: false,
+    dimmed: !selected && !focusIsFront,
+    calm: !selected,
+  });
+  return [
+    chrome.shadow,
+    `inset 0 0 0 1px ${chrome.borderColor}`,
+    selected ? "inset 2px 0 0 0 rgba(196, 181, 253, 0.42)" : "",
+    selected ? "inset -2px 0 0 0 rgba(196, 181, 253, 0.42)" : "",
+    `inset 0 -14px 26px rgba(0, 0, 0, ${focusIsFront ? 0.16 : 0.12})`,
+    `0 1px 6px rgba(0, 0, 0, ${focusIsFront ? 0.3 : 0.24})`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 export function applyDesktopFocusRegionVisuals(
@@ -319,13 +289,42 @@ export function applyDesktopFocusRegionVisuals(
   phraseHasFocusRegions: boolean,
 ): void {
   const focusFront = focusIsVisualFront(loopPracticeScope, phraseHasFocusRegions);
-  el.style.borderRadius = "1px";
+  const visualState = deriveRegionVisualState({
+    context: {
+      surface: "desktop",
+      activeLoopId: "phrase",
+      activeSegmentId: selected ? "segment" : null,
+      editableLoopId: null,
+      loopPlaybackEnabled: false,
+      loopPracticeScope,
+      phraseWaveformEditUnlockedById: {},
+      focusRegionWaveformEditUnlockedById: editable ? { segment: true } : {},
+      practiceEditCompatibility: {
+        editMode: editable,
+        practiceMode: !editable,
+      },
+    },
+    target: {
+      kind: "focus",
+      phraseId: "phrase",
+      segmentId: "segment",
+      phraseHasFocusRegions,
+    },
+  });
+  const focusChrome = resolveNeutralFocusChrome({
+    active: selected,
+    chipHover: false,
+    hovered: false,
+    dimmed: !selected && !focusFront,
+    calm: !selected && !editable,
+  });
+  el.style.borderRadius = "6px";
   el.style.isolation = "isolate";
-  if (focusFront) {
-    el.style.zIndex = editable && selected ? "10" : selected ? "8" : "6";
-  } else {
-    el.style.zIndex = editable && selected ? "5" : selected ? "4" : "3";
-  }
+  el.style.borderStyle = "solid";
+  el.style.borderWidth = "1px";
+  el.style.borderColor = focusChrome.borderColor;
+  el.style.backgroundColor = focusChrome.backgroundColor;
+  el.style.zIndex = desktopFocusZIndexFromState(visualState);
   el.style.boxShadow = desktopFocusRegionBoxShadow(
     paletteIndex,
     selected,
@@ -341,7 +340,40 @@ export function applyMobileReadonlyFocusRegionVisuals(
   phraseHasFocusRegions: boolean,
 ): void {
   const focusFront = focusIsVisualFront(loopPracticeScope, phraseHasFocusRegions);
-  el.style.borderRadius = "1px";
-  el.style.zIndex = focusFront ? (selected ? "4" : "3") : selected ? "2" : "1";
+  const visualState = deriveRegionVisualState({
+    context: {
+      surface: "mobile",
+      activeLoopId: "phrase",
+      activeSegmentId: selected ? "segment" : null,
+      editableLoopId: null,
+      loopPlaybackEnabled: false,
+      loopPracticeScope,
+      phraseWaveformEditUnlockedById: {},
+      focusRegionWaveformEditUnlockedById: {},
+      practiceEditCompatibility: {
+        editMode: false,
+        practiceMode: true,
+      },
+    },
+    target: {
+      kind: "focus",
+      phraseId: "phrase",
+      segmentId: "segment",
+      phraseHasFocusRegions,
+    },
+  });
+  const focusChrome = resolveNeutralFocusChrome({
+    active: selected,
+    chipHover: false,
+    hovered: false,
+    dimmed: !selected && !focusFront,
+    calm: !selected,
+  });
+  el.style.borderRadius = "5px";
+  el.style.borderStyle = "solid";
+  el.style.borderWidth = "1px";
+  el.style.borderColor = focusChrome.borderColor;
+  el.style.backgroundColor = focusChrome.backgroundColor;
+  el.style.zIndex = mobileReadonlyFocusZIndexFromState(visualState);
   el.style.boxShadow = mobileReadonlyFocusBoxShadow(selected, focusFront);
 }
