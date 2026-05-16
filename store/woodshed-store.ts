@@ -12,6 +12,7 @@ import {
 } from "@/lib/loop-engine";
 import { resolveFocusDeletionFallbackId } from "@/lib/focus-playback-segment";
 import { nanoid } from "@/lib/id";
+import { normalizePlaybackScopeSnapshot } from "@/lib/playback/playback-scope-normalization";
 import {
   DEFAULT_UPLOAD_MEDIA_SOURCE,
   type WoodshedMediaSource,
@@ -587,69 +588,54 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       };
       const next = s.loops.filter((l) => l.id !== id);
       const activeRemoved = s.activeLoopId === id;
-      /** If the editable loop got removed, exit edit mode. */
       const editableRemoved = s.editableLoopId === id;
-      const nextActive = activeRemoved ? next[0]?.id ?? null : s.activeLoopId;
       const nextEditable = editableRemoved ? null : s.editableLoopId;
-      if (next.length === 0) {
-        return {
-          loops: next,
-          activeLoopId: null,
-          editableLoopId: null,
-          loopPlaybackEnabled: false,
-          viewportMode: "follow",
-          activeSegmentId: null,
-          loopPracticeScope: "phrase",
-          lastPracticeSegmentIdByPhrase: {},
-          focusRegionWaveformEditUnlockedById: {},
-          phraseWaveformEditUnlockedById: {},
-        };
-      }
-      if (!activeRemoved) {
-        const removedHadActiveSegment = s.loops
-          .find((l) => l.id === id)
-          ?.segments?.some((seg) => seg.id === s.activeSegmentId);
-        const nextPhrase = { ...s.phraseWaveformEditUnlockedById };
-        delete nextPhrase[id];
-        return {
-          loops: next,
-          activeLoopId: nextActive,
-          editableLoopId: nextEditable,
-          activeSegmentId: removedHadActiveSegment ? null : s.activeSegmentId,
-          loopPracticeScope: removedHadActiveSegment
-            ? ("phrase" as const)
-            : s.loopPracticeScope,
-          lastPracticeSegmentIdByPhrase: pruneLast(
-            s.lastPracticeSegmentIdByPhrase,
-          ),
-          focusRegionWaveformEditUnlockedById: pruneUnlockForLoop(
-            s.focusRegionWaveformEditUnlockedById,
-          ),
-          phraseWaveformEditUnlockedById: nextPhrase,
-        };
-      }
-      const naLoop = nextActive
-        ? next.find((l) => l.id === nextActive)
-        : undefined;
-      const playback = Boolean(naLoop && naLoop.end > naLoop.start);
+      const nextLastPracticeSegmentIdByPhrase = pruneLast(
+        s.lastPracticeSegmentIdByPhrase,
+      );
+      const nextFocusUnlockById = pruneUnlockForLoop(
+        s.focusRegionWaveformEditUnlockedById,
+      );
       const nextPhrase = { ...s.phraseWaveformEditUnlockedById };
       delete nextPhrase[id];
+      const removedHadActiveSegment = Boolean(
+        s.activeSegmentId &&
+          removedLoop?.segments?.some((seg) => seg.id === s.activeSegmentId),
+      );
+      const normalized = normalizePlaybackScopeSnapshot({
+        duration: s.duration,
+        loops: next,
+        activeLoopId: activeRemoved ? null : s.activeLoopId,
+        activeSegmentId: activeRemoved || removedHadActiveSegment
+          ? null
+          : s.activeSegmentId,
+        lastPracticeSegmentIdByPhrase: nextLastPracticeSegmentIdByPhrase,
+        loopPlaybackEnabled: s.loopPlaybackEnabled,
+        loopPracticeScope: s.loopPracticeScope,
+      });
+      const loopFocusTick =
+        normalized.loopPlaybackEnabled &&
+        (!s.loopPlaybackEnabled || normalized.activeLoopId !== s.activeLoopId)
+          ? s.loopFocusTick + 1
+          : s.loopFocusTick;
       return {
         loops: next,
-        activeLoopId: nextActive,
+        activeLoopId: normalized.activeLoopId,
         editableLoopId: nextEditable,
-        loopPlaybackEnabled: playback,
-        loopFocusTick: playback ? s.loopFocusTick + 1 : s.loopFocusTick,
-        activeSegmentId: null,
-        loopPracticeScope: "phrase",
-        lastPracticeSegmentIdByPhrase: pruneLast(
-          s.lastPracticeSegmentIdByPhrase,
-        ),
-        focusRegionWaveformEditUnlockedById: pruneUnlockForLoop(
-          s.focusRegionWaveformEditUnlockedById,
-        ),
+        loopPlaybackEnabled: normalized.loopPlaybackEnabled,
+        loopFocusTick,
+        activeSegmentId: normalized.activeSegmentId,
+        loopPracticeScope: normalized.loopPracticeScope,
+        lastPracticeSegmentIdByPhrase:
+          normalized.activeLoopId == null
+            ? {}
+            : nextLastPracticeSegmentIdByPhrase,
+        focusRegionWaveformEditUnlockedById:
+          normalized.activeLoopId == null ? {} : nextFocusUnlockById,
         phraseWaveformEditUnlockedById: nextPhrase,
-        ...(!playback ? { viewportMode: "follow" as const } : {}),
+        ...(!normalized.loopPlaybackEnabled
+          ? { viewportMode: "follow" as const }
+          : {}),
       };
     }),
   setEditableLoopId: (id) =>
@@ -832,22 +818,31 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
       } else {
         delete nextLast[phraseId];
       }
-      let loopPracticeScope = s.loopPracticeScope;
-      if (cleared) {
-        loopPracticeScope = fallbackId ? "practice_region" : "phrase";
-      } else if (nextSegs.length === 0) {
-        loopPracticeScope = "phrase";
-      }
       const nextUnlock = { ...s.focusRegionWaveformEditUnlockedById };
       delete nextUnlock[segmentId];
-      return {
-        loops: s.loops.map((l) =>
-          l.id === phraseId ? { ...l, segments: nextSegs } : l,
-        ),
+      const nextLoops = s.loops.map((l) =>
+        l.id === phraseId ? { ...l, segments: nextSegs } : l,
+      );
+      const normalized = normalizePlaybackScopeSnapshot({
+        duration: s.duration,
+        loops: nextLoops,
+        activeLoopId: s.activeLoopId,
         activeSegmentId: cleared ? fallbackId : s.activeSegmentId,
-        loopPracticeScope,
+        lastPracticeSegmentIdByPhrase: nextLast,
+        loopPlaybackEnabled: s.loopPlaybackEnabled,
+        loopPracticeScope: s.loopPracticeScope,
+      });
+      return {
+        loops: nextLoops,
+        activeLoopId: normalized.activeLoopId,
+        activeSegmentId: normalized.activeSegmentId,
+        loopPlaybackEnabled: normalized.loopPlaybackEnabled,
+        loopPracticeScope: normalized.loopPracticeScope,
         lastPracticeSegmentIdByPhrase: nextLast,
         focusRegionWaveformEditUnlockedById: nextUnlock,
+        ...(!normalized.loopPlaybackEnabled
+          ? { viewportMode: "follow" as const }
+          : {}),
       };
     }),
   setFocusRegionWaveformEditUnlocked: (segmentId, unlocked) =>
@@ -880,42 +875,30 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     })),
   applyHydratedPracticePreferences: (prefs) =>
     set((s) => {
-      const activeId = s.activeLoopId;
-      const loop = activeId ? s.loops.find((l) => l.id === activeId) : undefined;
-      const playbackOk = Boolean(loop && loop.end > loop.start);
-      const loopPlaybackEnabled = prefs.loopPlaybackEnabled && playbackOk;
-      let loopPracticeScope = prefs.loopPracticeScope;
-      let activeSegmentId = prefs.activeSegmentId;
       const lastPracticeSegmentIdByPhrase = {
         ...prefs.lastPracticeSegmentIdByPhrase,
       };
-
-      if (loopPracticeScope === "practice_region" && !loop?.segments?.length) {
-        loopPracticeScope = "phrase";
-      }
-      if (
-        activeSegmentId &&
-        !loop?.segments?.some((seg) => seg.id === activeSegmentId)
-      ) {
-        activeSegmentId = null;
-      }
-
-      if (!loopPlaybackEnabled) {
-        return {
-          loopPlaybackEnabled: false,
-          loopPracticeScope: "phrase" as const,
-          activeSegmentId,
-          lastPracticeSegmentIdByPhrase,
-          viewportMode: "follow" as const,
-        };
-      }
-
-      return {
-        loopPlaybackEnabled: true,
-        loopPracticeScope,
-        activeSegmentId,
+      const normalized = normalizePlaybackScopeSnapshot({
+        duration: s.duration,
+        loops: s.loops,
+        activeLoopId: s.activeLoopId,
+        activeSegmentId: prefs.activeSegmentId,
         lastPracticeSegmentIdByPhrase,
-        loopFocusTick: playbackOk ? s.loopFocusTick + 1 : s.loopFocusTick,
+        loopPlaybackEnabled: prefs.loopPlaybackEnabled,
+        loopPracticeScope: prefs.loopPracticeScope,
+      });
+      return {
+        activeLoopId: normalized.activeLoopId,
+        loopPlaybackEnabled: normalized.loopPlaybackEnabled,
+        loopPracticeScope: normalized.loopPracticeScope,
+        activeSegmentId: normalized.activeSegmentId,
+        lastPracticeSegmentIdByPhrase,
+        loopFocusTick: normalized.loopPlaybackEnabled
+          ? s.loopFocusTick + 1
+          : s.loopFocusTick,
+        ...(!normalized.loopPlaybackEnabled
+          ? { viewportMode: "follow" as const }
+          : {}),
       };
     }),
 }));

@@ -1,5 +1,5 @@
-import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import type { PracticeLoop } from "@/lib/loop-engine";
+import { normalizePlaybackScopeSnapshot } from "@/lib/playback/playback-scope-normalization";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 
 export type RestartSnapshot = {
@@ -27,25 +27,6 @@ function clampTime(value: number, duration: number): number {
   return Math.min(duration, Math.max(0, value));
 }
 
-function compareLoopsByStartThenId(a: PracticeLoop, b: PracticeLoop): number {
-  return a.start - b.start || a.end - b.end || a.id.localeCompare(b.id);
-}
-
-function listValidLoops(loops: PracticeLoop[]): PracticeLoop[] {
-  return loops
-    .filter((loop) => loop.end > loop.start && Number.isFinite(loop.start))
-    .slice()
-    .sort(compareLoopsByStartThenId);
-}
-
-function resolveSegmentIdForLoop(
-  loop: PracticeLoop | null,
-  segmentId: string | null,
-): string | null {
-  if (!loop || !segmentId) return null;
-  return loop.segments?.some((seg) => seg.id === segmentId) ? segmentId : null;
-}
-
 /**
  * Resolve one canonical restart target across desktop/mobile/upload/youtube surfaces.
  * Play Through always restarts from transport start (0), never from stale loop rails.
@@ -54,25 +35,42 @@ export function resolvePlaybackRestartTarget(
   snapshot: RestartSnapshot,
 ): RestartResolution {
   const duration = snapshot.duration;
-  const orderedLoops = listValidLoops(snapshot.loops);
-  const activeLoop = snapshot.activeLoopId
-    ? orderedLoops.find((loop) => loop.id === snapshot.activeLoopId) ?? null
-    : null;
-
-  if (!snapshot.loopPlaybackEnabled) {
+  const normalized = normalizePlaybackScopeSnapshot({
+    duration: snapshot.duration,
+    loops: snapshot.loops,
+    activeLoopId: snapshot.activeLoopId,
+    activeSegmentId: snapshot.activeSegmentId,
+    lastPracticeSegmentIdByPhrase: snapshot.lastPracticeSegmentIdByPhrase,
+    loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
+    loopPracticeScope: snapshot.loopPracticeScope,
+  });
+  if (!normalized.loopPlaybackEnabled) {
+    const hasValidLoops = snapshot.loops.some(
+      (loop) => loop.end > loop.start && Number.isFinite(loop.start),
+    );
+    if (hasValidLoops) {
+      return {
+        restartTargetSeconds: 0,
+        resolvedLoopPlaybackEnabled: normalized.loopPlaybackEnabled,
+        resolvedLoopPracticeScope: normalized.loopPracticeScope,
+        resolvedActiveLoopId: normalized.activeLoopId,
+        resolvedActiveSegmentId: normalized.activeSegmentId,
+      };
+    }
     return {
-      restartTargetSeconds: 0,
-      resolvedLoopPlaybackEnabled: false,
-      resolvedLoopPracticeScope: "phrase",
-      resolvedActiveLoopId: activeLoop?.id ?? null,
-      resolvedActiveSegmentId: resolveSegmentIdForLoop(
-        activeLoop,
-        snapshot.activeSegmentId,
-      ),
+      restartTargetSeconds: clampTime(snapshot.currentTime ?? 0, duration),
+      resolvedLoopPlaybackEnabled: normalized.loopPlaybackEnabled,
+      resolvedLoopPracticeScope: normalized.loopPracticeScope,
+      resolvedActiveLoopId: normalized.activeLoopId,
+      resolvedActiveSegmentId: normalized.activeSegmentId,
     };
   }
 
-  const loop = activeLoop ?? orderedLoops[0] ?? null;
+  const loop =
+    normalized.activeLoopId != null
+      ? snapshot.loops.find((candidate) => candidate.id === normalized.activeLoopId) ??
+        null
+      : null;
   if (!loop) {
     return {
       restartTargetSeconds: clampTime(snapshot.currentTime ?? 0, duration),
@@ -83,38 +81,25 @@ export function resolvePlaybackRestartTarget(
     };
   }
 
-  if (snapshot.loopPracticeScope === "practice_region") {
-    const seg = resolveFocusPlaybackSegment({
-      loop,
-      activeSegmentId: snapshot.activeSegmentId,
-      lastPracticeSegmentIdByPhrase: snapshot.lastPracticeSegmentIdByPhrase ?? {},
-    });
+  if (normalized.loopPracticeScope === "practice_region" && normalized.activeSegmentId) {
+    const seg = loop.segments?.find(
+      (candidate) => candidate.id === normalized.activeSegmentId,
+    );
     if (seg && seg.endTime > seg.startTime) {
       return {
         restartTargetSeconds: clampTime(seg.startTime, duration),
-        resolvedLoopPlaybackEnabled: true,
-        resolvedLoopPracticeScope: "practice_region",
-        resolvedActiveLoopId: loop.id,
-        resolvedActiveSegmentId: seg.id,
+        resolvedLoopPlaybackEnabled: normalized.loopPlaybackEnabled,
+        resolvedLoopPracticeScope: normalized.loopPracticeScope,
+        resolvedActiveLoopId: normalized.activeLoopId,
+        resolvedActiveSegmentId: normalized.activeSegmentId,
       };
     }
-    return {
-      restartTargetSeconds: clampTime(loop.start, duration),
-      resolvedLoopPlaybackEnabled: true,
-      resolvedLoopPracticeScope: "phrase",
-      resolvedActiveLoopId: loop.id,
-      resolvedActiveSegmentId: null,
-    };
   }
-
   return {
     restartTargetSeconds: clampTime(loop.start, duration),
-    resolvedLoopPlaybackEnabled: true,
-    resolvedLoopPracticeScope: "phrase",
-    resolvedActiveLoopId: loop.id,
-    resolvedActiveSegmentId: resolveSegmentIdForLoop(
-      loop,
-      snapshot.activeSegmentId,
-    ),
+    resolvedLoopPlaybackEnabled: normalized.loopPlaybackEnabled,
+    resolvedLoopPracticeScope: normalized.loopPracticeScope,
+    resolvedActiveLoopId: normalized.activeLoopId,
+    resolvedActiveSegmentId: normalized.activeSegmentId,
   };
 }

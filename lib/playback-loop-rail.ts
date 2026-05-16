@@ -1,6 +1,7 @@
 import type { LoopRail, MediaPlaybackSurface } from "@/lib/audio-engine";
 import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import type { PracticeLoop } from "@/lib/loop-engine";
+import { normalizePlaybackScopeSnapshot } from "@/lib/playback/playback-scope-normalization";
 import { resolvePlaybackRestartTarget } from "@/lib/playback/restart-target";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 
@@ -17,23 +18,27 @@ export type PlaybackLoopRailSnapshot = {
 export function buildPlaybackLoopRail(
   snapshot: PlaybackLoopRailSnapshot,
 ): LoopRail {
-  const {
-    loops,
-    activeLoopId,
-    loopPlaybackEnabled,
-    activeSegmentId,
-    loopPracticeScope,
-    lastPracticeSegmentIdByPhrase,
-  } = snapshot;
-  const target = loops.find((l) => l.id === activeLoopId);
-  if (!target || !loopPlaybackEnabled) {
+  const normalized = normalizePlaybackScopeSnapshot({
+    duration: Number.POSITIVE_INFINITY,
+    loops: snapshot.loops,
+    activeLoopId: snapshot.activeLoopId,
+    activeSegmentId: snapshot.activeSegmentId,
+    lastPracticeSegmentIdByPhrase: snapshot.lastPracticeSegmentIdByPhrase,
+    loopPlaybackEnabled: snapshot.loopPlaybackEnabled,
+    loopPracticeScope: snapshot.loopPracticeScope,
+  });
+  if (!normalized.loopPlaybackEnabled || !normalized.activeLoopId) {
     return { enabled: false, start: 0, end: Number.POSITIVE_INFINITY };
   }
-  if (loopPracticeScope === "practice_region" && target.segments?.length) {
+  const target = snapshot.loops.find((l) => l.id === normalized.activeLoopId);
+  if (!target) {
+    return { enabled: false, start: 0, end: Number.POSITIVE_INFINITY };
+  }
+  if (normalized.loopPracticeScope === "practice_region" && target.segments?.length) {
     const seg = resolveFocusPlaybackSegment({
       loop: target,
-      activeSegmentId,
-      lastPracticeSegmentIdByPhrase,
+      activeSegmentId: normalized.activeSegmentId,
+      lastPracticeSegmentIdByPhrase: snapshot.lastPracticeSegmentIdByPhrase,
     });
     if (seg && seg.endTime > seg.startTime) {
       return { enabled: true, start: seg.startTime, end: seg.endTime };

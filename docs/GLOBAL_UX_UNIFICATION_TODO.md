@@ -130,7 +130,7 @@ Manual verification checklist for this pass:
 
 ### Phase 1C restart target unification (2026-05-15)
 
-Status: in progress (extraction + cross-surface wiring landed; manual parity re-run pending).
+Status: complete (manual parity passed across uploaded audio, YouTube, and mobile).
 
 Files changed in this pass:
 
@@ -152,20 +152,55 @@ Tests added:
 
 Manual restart checklist (Phase 1C):
 
-- [ ] Uploaded audio: Focus Loop scope restart returns to active Focus Loop start
-- [ ] Uploaded audio: Practice Section Loop scope restart returns to active Practice Section start
-- [ ] Uploaded audio: Play Through restart does not jump to stale loop/focus rail starts
-- [ ] YouTube project: repeat the same three restart checks above
-- [ ] Mobile practice flow: restart remains adjacent/primary and behavior matches resolved scope
-- [ ] Regression: click outside Practice Section -> Play Through, then restart
-- [ ] Regression: delete active Focus Loop, then restart
-- [ ] Regression: switch projects, then restart
+- [x] Uploaded audio: Focus Loop scope restart returns to active Focus Loop start
+- [x] Uploaded audio: Practice Section Loop scope restart returns to active Practice Section start
+- [x] Uploaded audio: Play Through restart does not jump to stale loop/focus rail starts
+- [x] YouTube project: repeat the same three restart checks above
+- [x] Mobile practice flow: restart remains adjacent/primary and behavior matches resolved scope
+- [x] Regression: click outside Practice Section -> Play Through, then restart
+- [x] Regression: delete active Focus Loop, then restart
+- [x] Regression: switch projects, then restart
 
 Remaining restart parity gaps / risks:
 
-- Manual parity sweep across upload + YouTube + mobile is still required for final Phase 1C sign-off.
 - `DesktopTransportBar`/mobile restart labels still describe phrase/focus semantics and do not yet explicitly communicate Play Through transport-start restart behavior.
 - Deterministic fallback for missing active Practice Section now picks earliest valid phrase; this should be validated against intended UX during manual pass.
+
+### Phase 1D playback scope normalization and stale-state cleanup (2026-05-15)
+
+Status: in progress (shared normalization helper extracted; first high-value integrations landed).
+
+Files changed in this pass:
+
+- `lib/playback/playback-scope-normalization.ts` (new canonical scope normalization helper)
+- `lib/playback/playback-scope-normalization.test.ts` (new normalization contract tests)
+- `store/woodshed-store.ts` (`removeLoop`, `removeSegment`, and hydrated preference application now normalize via shared helper)
+- `lib/practice-state-persist.ts` (hydration-time practice-state normalization now delegates to shared helper)
+- `lib/playback/restart-target.ts` (restart resolution now consumes normalized playback scope)
+- `lib/playback-loop-rail.ts` (loop rail derivation now uses normalized scope first)
+
+Tests added:
+
+- `lib/playback/playback-scope-normalization.test.ts`
+  - repeat off -> Play Through semantics
+  - stale active Practice Section deterministic fallback
+  - stale active Focus Loop deterministic fallback
+  - focus scope without valid Focus Loops degrades to Practice Section loop
+  - no loops degrades to Play Through
+  - deletion-style stale id cleanup
+
+Manual checklist (Phase 1D):
+
+- [ ] Uploaded audio: delete active Focus Loop -> deterministic fallback scope -> restart target still correct
+- [ ] Uploaded audio: delete active Practice Section -> no stale playback scope/id remains
+- [ ] YouTube: repeat deletion and scope fallback checks
+- [ ] Project switching between different section/focus structures preserves no stale focus/section behavior
+- [ ] Save/reload project with active focus/section state hydrates coherent scope
+
+Remaining gaps / risks (Phase 1D):
+
+- Manual parity sweep for deletion/project-switch/reload normalization paths still pending.
+- A few non-critical callsites still perform local state shaping before normalization (acceptable for now, but can be reduced later).
 
 ## Phase 2 — Playback Intelligence Unification
 

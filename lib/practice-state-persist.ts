@@ -1,5 +1,6 @@
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 import type { PracticeLoop } from "@/lib/loop-engine";
+import { normalizePlaybackScopeSnapshot } from "@/lib/playback/playback-scope-normalization";
 
 /** Versioned blob stored on `StoredProjectMeta` / cloud `practice_state`. */
 export type PracticeStatePersistV1 = {
@@ -38,6 +39,17 @@ function pruneLastPracticeMap(
   return out;
 }
 
+function inferDurationFromLoops(loops: PracticeLoop[]): number {
+  let max = 0;
+  for (const loop of loops) {
+    max = Math.max(max, loop.start, loop.end);
+    for (const seg of loop.segments ?? []) {
+      max = Math.max(max, seg.startTime, seg.endTime);
+    }
+  }
+  return max;
+}
+
 /**
  * Validates persisted practice prefs against loaded loops.
  * Returns a patch safe to merge via `applyHydratedPracticePreferences`, or null to skip.
@@ -62,34 +74,20 @@ export function normalizePracticeStatePersistV1(
       ? pruneLastPracticeMap(lastIn as Record<string, string>, loops)
       : {};
 
-  const loop = activeLoopId
-    ? loops.find((l) => l.id === activeLoopId)
-    : undefined;
-
-  let scope = loopPracticeScope;
-  if (scope === "practice_region" && !loop?.segments?.length) {
-    scope = "phrase";
-  }
-
-  let segId = activeSegmentId;
-  if (segId && !loop?.segments?.some((s) => s.id === segId)) {
-    segId = null;
-    if (scope === "practice_region") scope = "phrase";
-  }
-
-  if (!loop || loop.end <= loop.start) {
-    return {
-      loopPlaybackEnabled: false,
-      loopPracticeScope: "phrase",
-      activeSegmentId: null,
-      lastPracticeSegmentIdByPhrase,
-    };
-  }
+  const normalized = normalizePlaybackScopeSnapshot({
+    duration: inferDurationFromLoops(loops),
+    loops,
+    activeLoopId,
+    activeSegmentId,
+    lastPracticeSegmentIdByPhrase,
+    loopPlaybackEnabled,
+    loopPracticeScope,
+  });
 
   return {
-    loopPlaybackEnabled,
-    loopPracticeScope: scope,
-    activeSegmentId: segId,
+    loopPlaybackEnabled: normalized.loopPlaybackEnabled,
+    loopPracticeScope: normalized.loopPracticeScope,
+    activeSegmentId: normalized.activeSegmentId,
     lastPracticeSegmentIdByPhrase,
   };
 }
