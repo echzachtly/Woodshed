@@ -4,14 +4,20 @@
  * Synthetic (neutral) timeline — ruler + faux waveform + overlays (non-upload sources).
  *
  * **WaveSurfer vs synthetic:** RegionsPlugin uses decoded waveform pixels; this strip maps
- * **pointer X → seconds** via `pointerClientToSeconds` only. Bounds clamping matches store expectations
- * (`updateLoopBounds`, `updateSegment`, `clampSegmentsToPhraseBounds`).
+ * **pointer X → seconds** via `pointerClientToSeconds` only. Timeline **content width** ends at `duration`
+ * (`timelineSongContentWidthPx`) — no decorative extension past the song. Playback progress is conveyed
+ * on the **synthetic helix stroke** (`SyntheticWaveBedCanvas`: played brighter / unplayed subdued), not via
+ * full-height overlays.
+ * Bounds clamping matches store expectations (`updateLoopBounds`, `updateSegment`, `clampSegmentsToPhraseBounds`).
  *
  * **Uploaded-audio parity (when `authoring.enabled`):**
  * - Plain click+drag on the strip = **pan/scroll** (like the main waveform).
  * - **Shift+drag** uses the same rule as `shiftDragShouldCreateFocusInsideActivePhrase`; when
  *   `phraseWaveformEditUnlockedById` is supplied (YouTube/desktop parity), commits only while the
  *   active Practice Section waveform is unlocked in the store (`editableLoopId` / transport lock).
+ * - Practice Mode (`structural`): **double‑click** a Practice Section shell (outside the focus drill lane)
+ *   or a Focus Loop rect unlocks waveform handles (`enterPracticeSectionStructuralEdit` /
+ *   `enterFocusLoopStructuralEdit`) — single click stays selection-only (when unlock maps wired).
  * - Region `pointerdown` handlers `stopPropagation` so pan/shift-draft never steals phrase/focus edits.
  * - Phrase / focus boundaries follow optional unlock maps mirroring WaveSurfer (see authoring type).
  */
@@ -23,6 +29,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
@@ -32,9 +39,9 @@ import { cn } from "@/lib/utils";
 import {
   pickMajorTickIntervalSec,
   pointerClientToSeconds,
+  scrollHostContentLeftClientX,
   secondsToContentPx,
-  timelineLogicalWidthPx,
-  timelineScrollWidthPx,
+  timelineSongContentWidthPx,
 } from "@/components/neutral-timeline/timeline-coordinates";
 import { SyntheticWaveBedCanvas } from "@/components/neutral-timeline/synthetic-wave-bed-canvas";
 import {
@@ -49,6 +56,12 @@ import {
   shiftDragPhraseAuthoringAllowed,
   shiftDragShouldCreateFocusInsideActivePhrase,
 } from "@/lib/shift-waveform-authoring";
+import { applyNeutralTimelineWheelZoomAnchoredToCursor } from "@/lib/neutral-timeline-wheel-zoom";
+import {
+  enterFocusLoopStructuralEdit,
+  enterPracticeSectionStructuralEdit,
+  isStructuralPracticeMode,
+} from "@/lib/woodshed-enter-region-edit";
 
 export type SyntheticTimelineAuthoringConfig = {
   enabled: boolean;
@@ -72,6 +85,8 @@ export type SyntheticTimelineAuthoringConfig = {
   ) => void;
   onSelectPhrase: (id: string) => void;
   onSelectFocus: (phraseId: string, segmentId: string) => void;
+  /** YouTube parity: tap-to-seek anywhere on the timeline, including phrase/focus regions. */
+  onPlaybackIntentTap?: (sec: number) => void;
   onPhraseBoundsCommit: (phraseId: string, startSec: number, endSec: number) => void;
   onSegmentBoundsCommit: (
     phraseId: string,
@@ -85,6 +100,11 @@ export type SyntheticTimelineAuthoringConfig = {
    * Region hits never use this — must not steal in-phrase Shift+ authoring.
    */
   allowBackdropShiftPhraseDraftWhenPractice?: boolean;
+  /**
+   * Practice Mode: Shift+drag starting on a Practice Section body/strip still drafts a Focus Loop
+   * inside that phrase (commits move the session into Edit Mode via the workspace).
+   */
+  allowInPhraseShiftFocusDraftWhenPractice?: boolean;
 };
 
 export type NeutralTimelinePrototypeProps = {
@@ -97,6 +117,18 @@ export type NeutralTimelinePrototypeProps = {
   onPxPerSecChange: (nextPxPerSec: number) => void;
   onSeek: (seconds: number) => void;
   authoring?: SyntheticTimelineAuthoringConfig;
+  /** Tighter padding + faux-wave cap for phone-width YouTube shell */
+  compactLayout?: boolean;
+  /**
+   * Raise the faux-waveform band cap so flex growth reclaims vertical space (desktop shells).
+   */
+  waveformBandMaxPx?: number;
+  /** Chip / list hover — subtly links inspector focus pills to nested regions. */
+  timelineHoverSegmentId?: string | null;
+  /** Transport is actively playing — restrained playhead / chrome energy. */
+  playbackActive?: boolean;
+  /** Pointer over a Focus Loop region — links chips ↔ timeline bidirectionally. */
+  onTimelineFocusSegmentHover?: (segmentId: string | null) => void;
 };
 
 const RULER_H = 36;
@@ -108,6 +140,8 @@ const PAN_SLOP_PX = 4;
 /** Draft phrase ghost height hint (fraction of track). Focus ghost is vertically centered inside the lane. */
 const PHRASE_GHOST_VERTICAL_FRAC = 0.2;
 const TRACK_VERTICAL_GUTTER_PX = 6;
+
+const TRACK_BAND_MAX_COMPACT_PX = 118;
 
 const noop = () => {};
 const noopNum2 = (_a: number, _b: number) => {};
@@ -153,6 +187,10 @@ type Gesture =
        * Started from backdrop in Practice Mode — phrase draft only (no Focus Loop preview/commit).
        */
       backdropPhraseDraftOnly?: boolean;
+      /**
+       * Practice Mode: Shift+drag on phrase chrome — bypass unlock-map gating (commit still creates region).
+       */
+      practicePhraseShiftBypass?: boolean;
     }
   | {
       mode: "phraseMove";
@@ -225,6 +263,11 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     onPxPerSecChange,
     onSeek,
     authoring,
+    compactLayout = false,
+    waveformBandMaxPx,
+    timelineHoverSegmentId = null,
+    playbackActive = false,
+    onTimelineFocusSegmentHover,
   } = props;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -248,7 +291,6 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
   const gestureUnhookRef = useRef<(() => void) | null>(null);
 
-  const [viewportWidth, setViewportWidth] = useState(0);
   const [scrollMetrics, setScrollMetrics] = useState({
     scrollLeft: 0,
     scrollWidth: 1,
@@ -287,14 +329,23 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     ],
   );
 
-  const logicalWidth = useMemo(
-    () => timelineLogicalWidthPx(duration, pxPerSec),
+  /** Song-space width only — waveform/ruler/phrases end where the media ends (no faux viewport padding). */
+  const timelineSongWidthPx = useMemo(
+    () =>
+      !(duration > 0)
+        ? 1
+        : timelineSongContentWidthPx(duration, pxPerSec),
     [duration, pxPerSec],
   );
-  const scrollWidthPx = useMemo(
-    () => timelineScrollWidthPx(logicalWidth, viewportWidth),
-    [logicalWidth, viewportWidth],
-  );
+
+  /** Elapsed corridor in layout px — clamps to `[0, timelineSongWidthPx]` (feeds waveform progress stroke). */
+  const syntheticPlayedTimelinePx = useMemo(() => {
+    if (!(duration > 0)) return 0;
+    const t = Math.min(Math.max(currentTime, 0), duration);
+    const raw = secondsToContentPx(t, pxPerSec);
+    return Math.min(timelineSongWidthPx, Math.max(0, raw));
+  }, [currentTime, duration, pxPerSec, timelineSongWidthPx]);
+
   const tickMajorSec = useMemo(() => pickMajorTickIntervalSec(pxPerSec), [pxPerSec]);
   const tickMarks = useMemo(() => {
     if (!(duration > 0)) return [];
@@ -323,47 +374,43 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
   }, []);
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host || typeof ResizeObserver === "undefined") {
-      setViewportWidth(hostRef.current?.clientWidth ?? 0);
-      return;
-    }
-    const ro = new ResizeObserver(() => setViewportWidth(host.clientWidth));
-    ro.observe(host);
-    setViewportWidth(host.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-
-  useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     refreshScrollMetrics();
     const onScroll = () => refreshScrollMetrics();
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [refreshScrollMetrics, scrollWidthPx, duration]);
+  }, [refreshScrollMetrics, timelineSongWidthPx, duration]);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || !(duration > 0)) return;
     const wheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      event.preventDefault();
-      el.scrollLeft += event.deltaY;
-      refreshScrollMetrics();
+      applyNeutralTimelineWheelZoomAnchoredToCursor({
+        scrollEl: el,
+        durationSec: duration,
+        pxPerSec,
+        event,
+        onPxPerSecChange,
+      });
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
-  }, [refreshScrollMetrics, scrollWidthPx]);
+  }, [duration, pxPerSec, onPxPerSecChange]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
 
     const measure = () => {
+      const defaultMax = compactLayout ? TRACK_BAND_MAX_COMPACT_PX : TRACK_BAND_MAX_PX;
+      const bandMax =
+        typeof waveformBandMaxPx === "number" && waveformBandMaxPx > 0
+          ? waveformBandMaxPx
+          : defaultMax;
       const usable = Math.floor(el.clientHeight - RULER_H - 12);
       const next = Math.min(
-        TRACK_BAND_MAX_PX,
+        bandMax,
         Math.max(TRACK_BAND_MIN_PX, usable),
       );
       setTrackBandPx((prev) => (prev === next ? prev : next));
@@ -374,7 +421,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [refreshScrollMetrics]);
+  }, [compactLayout, refreshScrollMetrics, waveformBandMaxPx]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -407,10 +454,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     const live = liveRef.current;
     const el = scrollRef.current;
     if (!el || !(live.duration > 0)) return 0;
-    const rect = el.getBoundingClientRect();
     return pointerClientToSeconds({
       clientX,
-      scrollHostLeft: rect.left,
+      scrollHostLeft: scrollHostContentLeftClientX(el),
       scrollLeft: el.scrollLeft,
       pxPerSec: live.pxPerSec,
       durationSec: live.duration,
@@ -467,7 +513,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
         if (g.mode === "draftShift") {
           const bdOnly = g.backdropPhraseDraftOnly === true;
-          if (!bdOnly) {
+          const practiceBypass = g.practicePhraseShiftBypass === true;
+          if (!bdOnly && !practiceBypass) {
             const unlockPhraseId =
               g.phraseId !== undefined ? g.phraseId : ctx.activeLoopId;
             const shiftAllowed = shiftDragPhraseAuthoringAllowed({
@@ -618,7 +665,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
           if (!(live.duration > 0)) return;
           if (!g.moved) {
             if (!rulerIgnored(e.target)) {
-              onSeek(secsFromClient(e.clientX));
+              const sec = secsFromClient(e.clientX);
+              if (ctx.onPlaybackIntentTap) ctx.onPlaybackIntentTap(sec);
+              else onSeek(sec);
             }
           }
           return;
@@ -629,7 +678,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         if (g.mode === "draftShift") {
           if (!(live.duration > 0)) return;
           if (!g.moved) {
-            onSeek(secTap);
+            if (ctx.onPlaybackIntentTap) ctx.onPlaybackIntentTap(secTap);
+            else onSeek(secTap);
             return;
           }
           const bdOnly = g.backdropPhraseDraftOnly === true;
@@ -642,6 +692,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
               ? activePhrase.end - activePhrase.start
               : live.duration;
           const minDur = minPhraseOrSegmentSpanSec(live.duration);
+          const practiceBypass = g.practicePhraseShiftBypass === true;
 
           if (bdOnly) {
             if (pg && pg[1] - pg[0] >= minDur - 1e-9) {
@@ -652,11 +703,13 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
           const unlockPhraseId =
             g.phraseId !== undefined ? g.phraseId : ctx.activeLoopId;
-          const shiftAllowed = shiftDragPhraseAuthoringAllowed({
-            authoringEnabled: ctx.enabled,
-            phraseWaveformEditUnlockedById: ctx.phraseWaveformEditUnlockedById,
-            phraseId: unlockPhraseId,
-          });
+          const shiftAllowed =
+            practiceBypass ||
+            shiftDragPhraseAuthoringAllowed({
+              authoringEnabled: ctx.enabled,
+              phraseWaveformEditUnlockedById: ctx.phraseWaveformEditUnlockedById,
+              phraseId: unlockPhraseId,
+            });
           if (!shiftAllowed) return;
 
           if (
@@ -681,12 +734,16 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         if (ctx.enabled) {
           if (g.mode === "phraseMove") {
             if (!g.moved) {
-              ctx.onSelectPhrase(g.id);
+              if (ctx.onPlaybackIntentTap) ctx.onPlaybackIntentTap(secTap);
+              else ctx.onSelectPhrase(g.id);
             }
             return;
           }
           if (g.mode === "phraseRs") {
-            if (!g.moved) ctx.onSelectPhrase(g.id);
+            if (!g.moved) {
+              if (ctx.onPlaybackIntentTap) ctx.onPlaybackIntentTap(secTap);
+              else ctx.onSelectPhrase(g.id);
+            }
             return;
           }
           if (
@@ -695,7 +752,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
             g.mode === "segRsEnd"
           ) {
             if (!g.moved) {
-              ctx.onSelectFocus(g.phraseId, g.segId);
+              if (ctx.onPlaybackIntentTap) ctx.onPlaybackIntentTap(secTap);
+              else ctx.onSelectFocus(g.phraseId, g.segId);
             }
             return;
           }
@@ -743,8 +801,13 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         Boolean(auth.allowBackdropShiftPhraseDraftWhenPractice) &&
         scoped === undefined;
 
+      const inPhraseFocusPracticeDraft =
+        !auth.enabled &&
+        Boolean(auth.allowInPhraseShiftFocusDraftWhenPractice) &&
+        scoped !== undefined;
+
       const unlockTarget = scoped ?? auth.activeLoopId ?? undefined;
-      if (!backdropPhrasePracticeDraft) {
+      if (!backdropPhrasePracticeDraft && !inPhraseFocusPracticeDraft) {
         if (
           !shiftDragPhraseAuthoringAllowed({
             authoringEnabled: Boolean(auth.enabled),
@@ -764,6 +827,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         ...(scoped != null ? { phraseId: scoped } : {}),
         ...(backdropPhrasePracticeDraft
           ? { backdropPhraseDraftOnly: true }
+          : {}),
+        ...(inPhraseFocusPracticeDraft
+          ? { practicePhraseShiftBypass: true }
           : {}),
       };
       ghostPhraseRef.current = null;
@@ -830,32 +896,38 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       if (!phraseOverlayActive || !auth || event.button !== 0) return;
       if (loop.end <= loop.start) return;
 
-      /** Shift from Practice Section chrome (Edit Mode only) — Practice uses backdrop Shift for new phrases. */
+      /** Shift on phrase strip — begins focus draft in Practice Mode when allowed, else Edit Mode. */
       if (event.shiftKey) {
         event.stopPropagation();
         auth.onSelectPhrase(loop.id);
-        if (auth.enabled) beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
+        beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
         return;
       }
 
       event.stopPropagation();
-      auth.onSelectPhrase(loop.id);
+      if (auth.onPlaybackIntentTap) {
+        auth.onPlaybackIntentTap(secsFromClient(event.clientX));
+      } else {
+        auth.onSelectPhrase(loop.id);
+      }
     },
-    [auth, phraseOverlayActive, beginDraftShiftGesture],
+    [auth, phraseOverlayActive, beginDraftShiftGesture, secsFromClient],
   );
 
   const phraseBodyMoveDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>, loop: PracticeLoop) => {
       if (!auth || !phraseOverlayActive || event.button !== 0) return;
-      if (!phraseBoundaryEditable(loop.id)) return;
       if (loop.end <= loop.start) return;
 
+      /** Shift+drag for focus creation must work in Practice Mode — handle before boundary-edit gate. */
       if (event.shiftKey) {
         event.stopPropagation();
         auth.onSelectPhrase(loop.id);
-        if (auth.enabled) beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
+        beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
         return;
       }
+
+      if (!phraseBoundaryEditable(loop.id)) return;
 
       event.stopPropagation();
       auth.onSelectPhrase(loop.id);
@@ -921,9 +993,13 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     ) => {
       if (!phraseOverlayActive || !auth || event.button !== 0) return;
       event.stopPropagation();
-      auth.onSelectFocus(loop.id, segment.id);
+      if (auth.onPlaybackIntentTap) {
+        auth.onPlaybackIntentTap(secsFromClient(event.clientX));
+      } else {
+        auth.onSelectFocus(loop.id, segment.id);
+      }
     },
-    [auth, phraseOverlayActive],
+    [auth, phraseOverlayActive, secsFromClient],
   );
 
   const segmentBodyMoveDown = useCallback(
@@ -1031,18 +1107,25 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     <div
       ref={hostRef}
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-b border-stone-800/55 bg-[radial-gradient(ellipse_120%_80%_at_50%_0%,rgba(78,61,118,0.07),transparent_52%),linear-gradient(to_bottom,#0a0908,#070605)] text-stone-100 transition-[opacity,filter] duration-300",
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-b border-stone-800/55 bg-[radial-gradient(ellipse_120%_80%_at_50%_0%,rgba(78,61,118,0.07),transparent_52%),linear-gradient(to_bottom,#0a0908,#070605)] text-stone-100 transition-[opacity,filter,box-shadow] duration-300",
         timelinePracticeCalmChrome && "opacity-[0.98] saturate-[0.9]",
+        playbackActive &&
+          "shadow-[inset_0_-1px_0_rgba(167,139,250,0.07)] saturate-[1.02]",
       )}
     >
       <div
         ref={scrollRef}
-        className="neutral-timeline-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden px-3 pb-3 pt-2 sm:px-5 sm:pb-3.5 sm:pt-2.5"
+        className={cn(
+          "neutral-timeline-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden",
+          compactLayout
+            ? "px-2 pb-2 pt-1.5"
+            : "px-3 pb-3 pt-2 sm:px-5 sm:pb-3.5 sm:pt-2.5",
+        )}
       >
         <div
           ref={scrubRef}
           className="relative select-none touch-pan-x"
-          style={{ width: Math.max(scrollWidthPx, viewportWidth || 1) }}
+          style={{ width: timelineSongWidthPx }}
           onPointerDown={onScrubPointerDown}
         >
           <div className="relative mb-px" style={{ height: RULER_H }}>
@@ -1110,7 +1193,22 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
             )}
             style={{ height: trackBandPx }}
           >
-            <SyntheticWaveBedCanvas widthPx={scrollWidthPx} heightPx={trackBandPx} />
+            <SyntheticWaveBedCanvas
+              widthPx={timelineSongWidthPx}
+              heightPx={trackBandPx}
+              playedWidthPx={duration > 0 ? syntheticPlayedTimelinePx : 0}
+              playbackActive={playbackActive}
+            />
+
+            {duration > 0 ? (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute bottom-[10%] top-[10%] z-[1] w-px rounded-full bg-gradient-to-b from-transparent via-stone-200/48 to-transparent shadow-[2px_0_10px_rgba(251,252,253,0.03)] opacity-95"
+                style={{
+                  left: Math.max(0, timelineSongWidthPx - 1),
+                }}
+              />
+            ) : null}
 
             {phraseGhostDraft && phraseGhostDraft[1] > phraseGhostDraft[0] ? (
               <div
@@ -1146,7 +1244,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
             {secondsToContentPx(duration, pxPerSec) > 1 ? (
               <div
-                className="pointer-events-none absolute bottom-2 top-2 z-[45] w-0.5 -translate-x-1/2 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-500 shadow-[0_0_22px_rgba(251,191,36,0.35)]"
+                className={cn(
+                  "pointer-events-none absolute bottom-2 top-2 z-[45] w-0.5 -translate-x-1/2 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-500 transition-[filter,opacity,box-shadow] duration-200",
+                  playbackActive
+                    ? "opacity-100 shadow-[0_0_26px_rgba(251,191,36,0.42)]"
+                    : "shadow-[0_0_22px_rgba(251,191,36,0.35)]",
+                )}
                 style={{
                   left: secondsToContentPx(Math.min(duration, Math.max(currentTime, 0)), pxPerSec),
                 }}
@@ -1195,6 +1298,22 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                       ),
                       zIndex: phraseStackZ,
                     }}
+                    onDoubleClick={(e: ReactMouseEvent<HTMLDivElement>) => {
+                      if (
+                        !(
+                          phraseOverlayActive &&
+                          phraseUnlockMapProvided &&
+                          focusUnlockMapProvided
+                        )
+                      )
+                        return;
+                      if (!isStructuralPracticeMode()) return;
+                      const node = e.target as HTMLElement | null;
+                      if (node?.closest("[data-neutral-focus-lane]")) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      enterPracticeSectionStructuralEdit(loop.id);
+                    }}
                     onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
                       const node = e.target as HTMLElement | null;
                       if (
@@ -1206,7 +1325,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                       onPhraseStripPointerDown(e, loop);
                     }}
                   >
-                    <div className="pointer-events-none absolute left-3 right-3 top-2 z-[1] flex min-w-0 items-center gap-2">
+                    <div
+                      className={cn(
+                        "pointer-events-none absolute top-2 z-[1] flex min-w-0 items-center gap-2",
+                        compactLayout ? "left-2 right-2" : "left-3 right-3",
+                      )}
+                    >
                       <span
                         className={cn(
                           "truncate text-[10px] font-semibold uppercase tracking-[0.1em]",
@@ -1226,7 +1350,10 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                         <button
                           type="button"
                           aria-label={`Drag Practice Section: ${loop.name}`}
-                          className="absolute bottom-2 left-3 right-3 z-[22] rounded-md bg-transparent outline-none ring-0"
+                          className={cn(
+                            "absolute bottom-2 z-[22] rounded-md bg-transparent outline-none ring-0",
+                            compactLayout ? "left-2 right-2" : "left-3 right-3",
+                          )}
                           style={{ top: laneTopPx }}
                           tabIndex={-1}
                           onPointerDown={(e) => phraseBodyMoveDown(e, loop)}
@@ -1263,6 +1390,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                           const segPxLRel = Math.max(0, absL - pxL - innerPadX);
                           const segW = Math.max(4, absR - absL);
                           const activeSeg = segment.id === activeSegmentId;
+                          const chipHoverLink =
+                            timelineHoverSegmentId === segment.id &&
+                            !activeSeg;
                           const focusEditable =
                             phraseOverlayActive &&
                             focusSegmentBoundaryEditable(segment.id);
@@ -1278,7 +1408,9 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                               ? timelinePracticeCalmChrome
                                 ? "border border-emerald-300/22 bg-emerald-400/[0.07] ring-1 ring-emerald-200/15"
                                 : "border border-emerald-300/30 bg-emerald-400/[0.11] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_0_16px_rgba(167,243,208,0.065)] ring-1 ring-emerald-200/26"
-                              : "border border-white/[0.055] bg-emerald-500/[0.058] hover:border-emerald-400/24 hover:bg-emerald-400/[0.095]",
+                              : chipHoverLink
+                                ? "border border-emerald-300/35 bg-emerald-400/[0.09] ring-1 ring-emerald-200/35 shadow-[inset_0_0_12px_rgba(167,243,208,0.08)]"
+                                : "border border-white/[0.055] bg-emerald-500/[0.058] hover:border-emerald-400/24 hover:bg-emerald-400/[0.095]",
                           );
 
                           const zRaise = activeSeg ? 34 : 32;
@@ -1292,6 +1424,26 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                                 left: segPxLRel,
                                 width: segW,
                                 zIndex: zRaise,
+                              }}
+                              onPointerEnter={() => {
+                                onTimelineFocusSegmentHover?.(segment.id);
+                              }}
+                              onPointerLeave={() => {
+                                onTimelineFocusSegmentHover?.(null);
+                              }}
+                              onDoubleClick={(e: ReactMouseEvent<HTMLDivElement>) => {
+                                if (
+                                  !(
+                                    phraseOverlayActive &&
+                                    phraseUnlockMapProvided &&
+                                    focusUnlockMapProvided
+                                  )
+                                )
+                                  return;
+                                if (!isStructuralPracticeMode()) return;
+                                e.preventDefault();
+                                e.stopPropagation();
+                                enterFocusLoopStructuralEdit(loop.id, segment.id);
                               }}
                             >
                               {focusEditable ? (

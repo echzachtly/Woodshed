@@ -45,6 +45,11 @@ export type DesktopTransportBarProps = {
   formatTime: (t: number) => string;
   /** Decoded timeline not ready — quieter idle transport (no playback yet). */
   timelineIdle?: boolean;
+  /** Optional label for explicit Practice vs Edit mode (YouTube / synthetic timeline). */
+  interactionModeChip?: {
+    /** When true → "Edit Mode" styling; false → Practice Mode styling. */
+    editingEnabled: boolean;
+  };
 };
 
 export const DesktopTransportBar = memo(function DesktopTransportBar(
@@ -71,6 +76,7 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
     onTempoSlider,
     formatTime,
     timelineIdle = false,
+    interactionModeChip,
   } = props;
 
   const editingPhrase = Boolean(
@@ -99,10 +105,10 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
   const loopAriaLabel = `Practice loop. ${getLoopModeDescription(loopCurrent)}. Next: ${getLoopModeDescription(loopNext)}.`;
 
   const editTitle = editingPhrase
-    ? "Lock phrase waveform boundaries"
+    ? "Practice Mode — lock phrase waveform boundaries"
     : regionContextActive
-      ? "Unlock focus region boundaries (inspector)"
-      : "Unlock phrase waveform boundaries";
+      ? "Unlock focus boundaries (Edit Mode)"
+      : "Edit Mode — unlock phrase waveform boundaries";
 
   const deleteTitle = regionContextActive
     ? "Delete focus region"
@@ -111,16 +117,19 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
   const playbackCluster = (
     <div
       className={cn(
-        "flex items-center gap-1.5 rounded-xl border border-stone-800/60 bg-stone-950/50 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]",
+        "flex items-center gap-1.5 rounded-xl border border-stone-800/60 bg-stone-950/50 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-[box-shadow,border-color,opacity] duration-300",
         timelineIdle && "border-stone-800/40 bg-stone-950/35 shadow-none",
+        !timelineIdle &&
+          isPlaying &&
+          "border-violet-500/25 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.08),0_4px_20px_-8px_rgba(109,40,217,0.35)]",
       )}
       role="group"
       aria-label={timelineIdle ? "Playback (idle)" : "Playback and replay"}
     >
-      <button
-        type="button"
-        className={cn(
-          "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-stone-200 shadow-sm shadow-black/35 transition-colors",
+        <button
+          type="button"
+          className={cn(
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-stone-200 shadow-sm shadow-black/35 transition-[border-color,box-shadow,opacity] duration-300",
           "border-stone-600/75 bg-stone-900/90 hover:border-violet-500/35 hover:bg-stone-800/90 hover:text-violet-100",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-500/50",
           (!hasActivePhrase || timelineIdle) && "opacity-40",
@@ -162,10 +171,11 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
   return (
     <div
       className={cn(
-        "relative grid w-full min-w-0 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-t px-2 py-1.5 sm:px-2.5",
+        "relative grid w-full min-w-0 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-t px-2 py-1 sm:px-2.5 transition-[background-color,box-shadow] duration-300",
         timelineIdle
           ? "border-stone-900/65 bg-[#070605]/95"
-          : "border-stone-800/60 bg-[#060504]",
+          : "border-stone-800/55 bg-[#060504]",
+        !timelineIdle && isPlaying && "bg-[#070605] shadow-[inset_0_1px_0_rgba(167,139,250,0.05)]",
       )}
       aria-label="Transport"
     >
@@ -227,6 +237,29 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
             {timelineIdle ? "—" : loopCurrent}
           </span>
         </button>
+
+        {interactionModeChip ? (
+          <span
+            className={cn(
+              "hidden max-w-[5.75rem] overflow-hidden truncate rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.1em] sm:inline lg:max-w-[7rem]",
+              interactionModeChip.editingEnabled
+                ? "border-amber-500/38 bg-amber-500/[0.11] text-amber-100/93"
+                : "border-emerald-500/[0.26] bg-emerald-950/45 text-emerald-100/[0.92]",
+            )}
+            aria-label={
+              interactionModeChip.editingEnabled
+                ? "Edit Mode — waveform boundaries editable"
+                : "Practice Mode — protected from accidental edits"
+            }
+            title={
+              interactionModeChip.editingEnabled
+                ? "Edit Mode — intentional authoring"
+                : "Practice Mode — use lock to edit boundaries or Shift-drag to author"
+            }
+          >
+            {interactionModeChip.editingEnabled ? "Edit" : "Practice"}
+          </span>
+        ) : null}
 
         <Button
           variant="ghost"

@@ -20,13 +20,16 @@
  */
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -67,7 +70,15 @@ import {
   validateYoutubeDexieProjectMeta,
 } from "@/lib/youtube/youtube-dexie-project";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
+import type { WoodshedMediaSource } from "@/lib/woodshed-media-source";
+import {
+  applyYoutubeNeutralTimelinePlaybackIntent,
+} from "@/lib/youtube/neutral-timeline-playback-intent";
 import { useWoodshedStore } from "@/store/woodshed-store";
+
+export type YoutubeWorkspaceHandle = {
+  getPlaybackSurface: () => MediaPlaybackSurface | null;
+};
 
 export type YoutubeWorkspaceProps = {
   /**
@@ -76,6 +87,12 @@ export type YoutubeWorkspaceProps = {
    */
   variant?: "devPage" | "embedded";
   className?: string;
+  /**
+   * Phone-width embedded shell: capped synthetic timeline, optional {@link children} (e.g. mobile transport),
+   * then a constrained YouTube player strip — matches upload-project mobile hierarchy.
+   */
+  mobileStackedLayout?: boolean;
+  children?: ReactNode;
 };
 
 const DEFAULT_WATCH_URL = `https://www.youtube.com/watch?v=${YOUTUBE_PROTOTYPE_DEFAULT_VIDEO_ID}`;
@@ -85,14 +102,41 @@ const DESKTOP_BOTTOM_STACK_PX_KEY = "woodshed-desktop-bottom-stack-px";
 const DESKTOP_BOTTOM_STACK_MIN = 112;
 const DESKTOP_WAVEFORM_MIN = 80;
 const DESKTOP_BOTTOM_STACK_MAX_FRAC = 0.58;
+/** Desktop YouTube shells — allow faux waveform to reclaim vertical flex space. */
+const YOUTUBE_DESKTOP_WAVE_BAND_MAX_PX = 1080;
+/** Hysteresis: bottom stack shorter than this nudges Practice Focus layout; taller clears it. */
+const YT_PRACTICE_ZEN_BOTTOM_ENTER_PX = 152;
+const YT_PRACTICE_ZEN_BOTTOM_EXIT_PX = 208;
+
+function youtubeDisplayTitle(parts: {
+  mediaKind: WoodshedMediaSource["kind"];
+  mediaTitle?: string | null;
+  projectName: string;
+}): string {
+  if (
+    parts.mediaKind === "youtube" &&
+    typeof parts.mediaTitle === "string" &&
+    parts.mediaTitle.trim().length > 0
+  ) {
+    return parts.mediaTitle.trim();
+  }
+  const p = parts.projectName.trim();
+  return p.length > 0 ? p : "Session";
+}
 
 function canonicalWatchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
-export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
-  const variant = props?.variant ?? "devPage";
-  const rootClassName = props?.className;
+export const YoutubeWorkspace = forwardRef<
+  YoutubeWorkspaceHandle,
+  YoutubeWorkspaceProps
+>(function YoutubeWorkspace(props, ref) {
+  const variant = props.variant ?? "devPage";
+  const rootClassName = props.className;
+  const mobileStackedLayout =
+    Boolean(props.mobileStackedLayout) && variant === "embedded";
+  const stackedChrome = props.children;
 
   const sectionRef = useRef<HTMLElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -115,6 +159,15 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [playbackSurface, setPlaybackSurface] =
     useState<MediaPlaybackSurface | null>(null);
+  const playbackSurfaceRef = useRef<MediaPlaybackSurface | null>(null);
+
+  useEffect(() => {
+    playbackSurfaceRef.current = playbackSurface;
+  }, [playbackSurface]);
+
+  useImperativeHandle(ref, () => ({
+    getPlaybackSurface: () => playbackSurfaceRef.current,
+  }));
 
   const [sessionGeneration, setSessionGeneration] = useState(0);
   const [savedYoutubeProjects, setSavedYoutubeProjects] = useState<
@@ -135,6 +188,15 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
   const [desktopBottomStackPx, setDesktopBottomStackPx] = useState(200);
   const desktopBottomStackPxRef = useRef(desktopBottomStackPx);
   desktopBottomStackPxRef.current = desktopBottomStackPx;
+
+  const [practiceFocusZen, setPracticeFocusZen] = useState(false);
+  const [linkedFocusHoverId, setLinkedFocusHoverId] = useState<string | null>(
+    null,
+  );
+
+  const dismissPracticeFocusZen = useCallback(() => {
+    setPracticeFocusZen(false);
+  }, []);
 
   const {
     duration,
@@ -230,6 +292,26 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
     [phraseWaveformEditUnlockedById, focusRegionWaveformEditUnlockedById],
   );
 
+  const youtubeSessionPresentation = useMemo(() => {
+    const primary = youtubeDisplayTitle({
+      mediaKind: mediaSource.kind,
+      mediaTitle:
+        mediaSource.kind === "youtube"
+          ? (mediaSource.title ?? null)
+          : undefined,
+      projectName,
+    });
+    const ytVideoId =
+      mediaSource.kind === "youtube"
+        ? mediaSource.videoId
+        : (resolvedId?.trim() ?? "");
+    const secondary =
+      ytVideoId.length > 0
+        ? `YouTube · ${ytVideoId}`
+        : "YouTube session";
+    return { primary, secondary };
+  }, [mediaSource, projectName, resolvedId]);
+
   /** Dev sandbox resets global session; embedded mode is driven by main-app routing. */
   useEffect(() => {
     if (variant === "embedded") return undefined;
@@ -266,6 +348,7 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
   }, []);
 
   useEffect(() => {
+    if (mobileStackedLayout) return;
     const clampBottom = () => {
       const root = youtubeDesktopSplitRef.current;
       if (!root) return;
@@ -285,7 +368,17 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
     clampBottom();
     window.addEventListener("resize", clampBottom);
     return () => window.removeEventListener("resize", clampBottom);
-  }, []);
+  }, [mobileStackedLayout]);
+
+  useEffect(() => {
+    if (mobileStackedLayout) return;
+    const px = desktopBottomStackPx;
+    setPracticeFocusZen((prev) => {
+      if (px <= YT_PRACTICE_ZEN_BOTTOM_ENTER_PX) return true;
+      if (px >= YT_PRACTICE_ZEN_BOTTOM_EXIT_PX) return false;
+      return prev;
+    });
+  }, [desktopBottomStackPx, mobileStackedLayout]);
 
   const onYoutubeDesktopBottomResizePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -717,6 +810,7 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
       phraseWaveformEditUnlockedById: phraseUnlockForSynth,
       focusRegionWaveformEditUnlockedById: focusUnlockForSynth,
       allowBackdropShiftPhraseDraftWhenPractice: true,
+      allowInPhraseShiftFocusDraftWhenPractice: true,
       onShiftPhraseDragCreate: (startSec, endSec) => {
         exitPhraseFitAfterUserNavigation();
         const phrase = createPhraseFromShiftDrag(startSec, endSec);
@@ -740,6 +834,10 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
       onSelectPhrase: (id) => selectLoop(id),
       onSelectFocus: (phraseId, segmentId) =>
         selectSegment(phraseId, segmentId),
+      onPlaybackIntentTap: (sec) => {
+        applyYoutubeNeutralTimelinePlaybackIntent(sec);
+        handleNeutralTimelineSeek(sec);
+      },
       onPhraseBoundsCommit: (phraseId, startSec, endSec) =>
         updateLoopBounds(phraseId, startSec, endSec),
       onSegmentBoundsCommit: (phraseId, segmentId, startSec, endSec) =>
@@ -756,6 +854,7 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
     duration,
     exitPhraseFitAfterUserNavigation,
     focusRegionWaveformEditUnlockedById,
+    handleNeutralTimelineSeek,
     phraseWaveformEditUnlockedById,
     playbackSurface,
     renameLoop,
@@ -837,8 +936,8 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
         case "a":
         case "A": {
           if (event.metaKey || event.ctrlKey || event.altKey) break;
-          /** Match synthetic timeline Practice Mode — add phrase only while structurally editable. */
-          if (!youtubeStructuralEditActive) break;
+          /** New phrase from keyboard always allowed — {@link addLoopCandidate} enters Edit Mode via store. */
+          if (!(duration > 0)) break;
           event.preventDefault();
           useWoodshedStore.getState().addLoopCandidate();
           break;
@@ -891,7 +990,7 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
           break;
       }
     },
-    [duration, playbackSurface, setCurrentTime, setPlaying, youtubeStructuralEditActive],
+    [duration, playbackSurface, setCurrentTime, setPlaying],
   );
 
   const handleTransportTogglePlay = useCallback(() => {
@@ -985,6 +1084,7 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
       className={cn(
         "flex min-h-0 flex-1 flex-col overflow-hidden bg-[#060504] text-stone-100 outline-none",
         variant === "devPage" && "h-[100dvh]",
+        mobileStackedLayout && "min-w-0 overflow-x-hidden",
         rootClassName,
       )}
       tabIndex={-1}
@@ -1097,151 +1197,232 @@ export function YoutubeWorkspace(props?: YoutubeWorkspaceProps) {
 
       <div
         ref={youtubeDesktopSplitRef}
-        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+          mobileStackedLayout && "overflow-x-hidden overflow-y-auto",
+        )}
       >
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)]">
-          {duration > 0 ? (
-            <NeutralTimelinePrototype
-              duration={duration}
-              currentTime={currentTime}
-              loops={loops}
-              activeLoopId={activeLoopId}
-              activeSegmentId={activeSegmentId}
-              pxPerSec={minPxPerSec}
-              onPxPerSecChange={handleNeutralTimelinePxPerSec}
-              onSeek={handleNeutralTimelineSeek}
-              authoring={youtubeSyntheticAuthoring}
-            />
-          ) : (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-8 text-center text-sm text-stone-600">
-              {resolvedId
-                ? "Timeline appears once YouTube reports duration."
-                : "Enter a valid video URL to load."}
+        {mobileStackedLayout ? (
+          <>
+            <div className="relative flex max-h-[min(40svh,268px)] min-h-[104px] shrink-0 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)]">
+              {duration > 0 ? (
+                <NeutralTimelinePrototype
+                  duration={duration}
+                  currentTime={currentTime}
+                  loops={loops}
+                  activeLoopId={activeLoopId}
+                  activeSegmentId={activeSegmentId}
+                  pxPerSec={minPxPerSec}
+                  onPxPerSecChange={handleNeutralTimelinePxPerSec}
+                  onSeek={handleNeutralTimelineSeek}
+                  authoring={youtubeSyntheticAuthoring}
+                  compactLayout
+                  playbackActive={isPlaying}
+                />
+              ) : (
+                <div className="flex min-h-[96px] flex-col items-center justify-center px-3 py-4 text-center text-xs leading-snug text-stone-600">
+                  {resolvedId
+                    ? "Timeline appears once YouTube reports duration."
+                    : "Enter a valid video URL to load."}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize timeline and bottom panel"
-          tabIndex={0}
-          className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/25 bg-[#090807] outline-none hover:bg-[#0c0a09] hover:border-stone-700/35 focus-visible:ring-2 focus-visible:ring-violet-500/40"
-          onPointerDown={onYoutubeDesktopBottomResizePointerDown}
-          onPointerMove={onYoutubeDesktopBottomResizePointerMove}
-          onPointerUp={onYoutubeDesktopBottomResizePointerUp}
-          onPointerCancel={onYoutubeDesktopBottomResizePointerUp}
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-            e.preventDefault();
-            const root = youtubeDesktopSplitRef.current;
-            if (!root) return;
-            const h = root.clientHeight;
-            const maxBottom = Math.min(
-              Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
-              h - DESKTOP_WAVEFORM_MIN,
-            );
-            const delta = e.key === "ArrowUp" ? 8 : -8;
-            setDesktopBottomStackPx((prev) => {
-              const next = Math.min(
-                Math.max(prev + delta, DESKTOP_BOTTOM_STACK_MIN),
-                Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
-              );
-              try {
-                sessionStorage.setItem(
-                  DESKTOP_BOTTOM_STACK_PX_KEY,
-                  String(Math.round(next)),
-                );
-              } catch {
-                /* private mode */
-              }
-              return next;
-            });
-          }}
-        >
-          <span className="pointer-events-none h-1 w-10 rounded-full bg-stone-600/90 group-hover:bg-stone-500" />
-        </div>
-
-        <div
-          className="flex w-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-stone-800/38 bg-[#050403]/98 sm:flex-row"
-          style={{ maxHeight: desktopBottomStackPx }}
-        >
-          <aside className="flex min-h-0 w-full shrink-0 flex-col bg-[#060504] sm:w-[min(260px,32vw)] sm:max-w-[300px] sm:border-r sm:border-stone-800/42">
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-stone-800/50 px-2.5 py-1">
-              <div className="min-w-0">
-                <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-stone-600">
-                  Source
-                </p>
-                {resolvedId ? (
-                  <p
-                    className="truncate font-mono text-[10px] text-stone-600"
-                    title={resolvedId}
-                  >
-                    {resolvedId}
-                  </p>
-                ) : (
-                  <p className="text-[10px] text-stone-600">No video id</p>
-                )}
+            {stackedChrome ? (
+              <div className="min-h-0 w-full min-w-0 shrink-0 overflow-x-hidden">
+                {stackedChrome}
               </div>
-              <button
-                type="button"
-                className="shrink-0 rounded-md border border-stone-800/85 bg-black/35 px-2 py-0.5 text-[10px] font-medium text-stone-400 hover:border-stone-700 hover:bg-stone-950 hover:text-stone-200"
-                aria-pressed={youtubeSourceExpanded}
-                onClick={() => setYoutubeSourceExpanded((v) => !v)}
-              >
-                {youtubeSourceExpanded ? "Smaller" : "Larger"}
-              </button>
+            ) : null}
+            <div className="w-full min-w-0 shrink-0 overflow-hidden border-t border-stone-800/42 bg-[#050403]/98 px-2 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5">
+              <div className="flex items-center justify-between gap-2 pb-0.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[11px] font-semibold leading-snug tracking-tight text-stone-100">
+                    {youtubeSessionPresentation.primary}
+                  </p>
+                  <p
+                    className="truncate text-[9px] text-stone-500"
+                    title={youtubeSessionPresentation.secondary}
+                  >
+                    {youtubeSessionPresentation.secondary}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-md border border-stone-800/85 bg-black/35 px-2 py-1 text-[10px] font-medium text-stone-400 hover:border-stone-700 hover:bg-stone-950 hover:text-stone-200 touch-manipulation"
+                  aria-pressed={youtubeSourceExpanded}
+                  onClick={() => setYoutubeSourceExpanded((v) => !v)}
+                >
+                  {youtubeSourceExpanded ? "Hide" : "Show"}
+                </button>
+              </div>
+              <div className="mx-auto w-full max-w-full overflow-hidden">
+                <div
+                  ref={hostRef}
+                  tabIndex={-1}
+                  className={cn(
+                    "relative mx-auto w-full max-w-full overflow-hidden rounded-[10px] border border-white/[0.055] bg-[#050403] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-black/60",
+                    youtubeSourceExpanded
+                      ? "aspect-video max-h-[min(26svh,200px)]"
+                      : "aspect-video max-h-[64px] opacity-[0.94]",
+                  )}
+                />
+              </div>
             </div>
-            <div className="flex min-h-0 flex-1 items-center justify-center p-2 pt-1 sm:p-2.5 sm:pb-2">
-              <div
-                ref={hostRef}
-                tabIndex={-1}
-                className={cn(
-                  "relative w-full overflow-hidden rounded-[10px] border border-white/[0.055] bg-[#050403] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-black/60",
-                  youtubeSourceExpanded
-                    ? "aspect-video max-h-[min(200px,32vh)] max-w-full"
-                    : "aspect-video max-h-[68px] max-w-full opacity-[0.94]",
-                )}
-              />
+          </>
+        ) : (
+          <>
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)] motion-safe:transition-shadow duration-300">
+              {duration > 0 ? (
+                <NeutralTimelinePrototype
+                  duration={duration}
+                  currentTime={currentTime}
+                  loops={loops}
+                  activeLoopId={activeLoopId}
+                  activeSegmentId={activeSegmentId}
+                  pxPerSec={minPxPerSec}
+                  onPxPerSecChange={handleNeutralTimelinePxPerSec}
+                  onSeek={handleNeutralTimelineSeek}
+                  authoring={youtubeSyntheticAuthoring}
+                  waveformBandMaxPx={YOUTUBE_DESKTOP_WAVE_BAND_MAX_PX}
+                  timelineHoverSegmentId={linkedFocusHoverId}
+                  playbackActive={isPlaying}
+                  onTimelineFocusSegmentHover={setLinkedFocusHoverId}
+                />
+              ) : (
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-8 text-center text-sm text-stone-600">
+                  {resolvedId
+                    ? "Timeline appears once YouTube reports duration."
+                    : "Enter a valid video URL to load."}
+                </div>
+              )}
             </div>
-          </aside>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden sm:border-l sm:border-stone-900/55">
-            <DesktopTransportBar
-              duration={duration}
-              currentTime={currentTime}
-              isPlaying={isPlaying}
-              timelineIdle={timelineIdle}
-              loopPlaybackEnabled={loopPlaybackEnabled}
-              canEnableLoopPlayback={Boolean(
-                activeLoop && activeLoop.end > activeLoop.start,
-              )}
-              loopPracticeScope={loopPracticeScope}
-              hasActivePhrase={Boolean(
-                activeLoop && activeLoop.end > activeLoop.start,
-              )}
-              phraseHasFocusRegions={phraseHasFocusRegions}
-              regionContextActive={regionContextActive}
-              activeLoopId={activeLoopId}
-              editableLoopId={editableLoopId}
-              onToggleEditContext={handleTransportEditContext}
-              onDeleteContext={handleTransportDeleteContext}
-              tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
-              onTogglePlay={handleTransportTogglePlay}
-              onRestartLoop={handleRestartLoop}
-              onCycleLoopPlaybackMode={() => cycleLoopPlaybackMode()}
-              onTempoSlider={handleTransportTempo}
-              formatTime={(t) => formatTime(t)}
-            />
-            <div className="min-h-0 flex-1 overflow-y-auto border-t border-stone-800/55 bg-[#070605]/98">
-              <DesktopInspectorPanel />
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize timeline and bottom panel"
+              tabIndex={0}
+              className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/22 bg-[#090807] outline-none transition-colors duration-200 hover:bg-[#0c0a09] hover:border-stone-700/35 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+              onPointerDown={onYoutubeDesktopBottomResizePointerDown}
+              onPointerMove={onYoutubeDesktopBottomResizePointerMove}
+              onPointerUp={onYoutubeDesktopBottomResizePointerUp}
+              onPointerCancel={onYoutubeDesktopBottomResizePointerUp}
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                e.preventDefault();
+                const root = youtubeDesktopSplitRef.current;
+                if (!root) return;
+                const h = root.clientHeight;
+                const maxBottom = Math.min(
+                  Math.floor(h * DESKTOP_BOTTOM_STACK_MAX_FRAC),
+                  h - DESKTOP_WAVEFORM_MIN,
+                );
+                const delta = e.key === "ArrowUp" ? 8 : -8;
+                setDesktopBottomStackPx((prev) => {
+                  const next = Math.min(
+                    Math.max(prev + delta, DESKTOP_BOTTOM_STACK_MIN),
+                    Math.max(DESKTOP_BOTTOM_STACK_MIN, maxBottom),
+                  );
+                  try {
+                    sessionStorage.setItem(
+                      DESKTOP_BOTTOM_STACK_PX_KEY,
+                      String(Math.round(next)),
+                    );
+                  } catch {
+                    /* private mode */
+                  }
+                  return next;
+                });
+              }}
+            >
+              <span className="pointer-events-none h-1 w-10 rounded-full bg-stone-600/90 group-hover:bg-stone-500" />
             </div>
-          </div>
-        </div>
+
+            <div
+              className="flex w-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-stone-900/35 bg-[#050403]/95 motion-safe:transition-[max-height] motion-safe:duration-200 motion-safe:ease-out sm:flex-row"
+              style={{ maxHeight: desktopBottomStackPx }}
+            >
+              <aside className="flex min-h-0 w-full shrink-0 flex-col bg-[#060504]/90 sm:w-[min(248px,30vw)] sm:max-w-[280px] sm:border-r sm:border-stone-900/42">
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-stone-900/40 px-2 py-0.5 sm:px-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-[12px] font-semibold tracking-tight text-stone-100">
+                      {youtubeSessionPresentation.primary}
+                    </p>
+                    <p
+                      className="mt-px truncate text-[10px] text-stone-500"
+                      title={youtubeSessionPresentation.secondary}
+                    >
+                      {youtubeSessionPresentation.secondary}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full border border-stone-800/72 bg-black/30 px-2 py-0.5 text-[10px] font-medium text-stone-500 hover:border-stone-700 hover:bg-stone-950 hover:text-stone-300"
+                    aria-pressed={youtubeSourceExpanded}
+                    onClick={() => setYoutubeSourceExpanded((v) => !v)}
+                  >
+                    {youtubeSourceExpanded ? "Smaller" : "Larger"}
+                  </button>
+                </div>
+                <div className="flex min-h-0 flex-1 items-center justify-center p-1.5 sm:p-2 sm:pb-1.5">
+                  <div
+                    ref={hostRef}
+                    tabIndex={-1}
+                    className={cn(
+                      "relative w-full overflow-hidden rounded-[10px] border border-white/[0.055] bg-[#050403] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-black/60",
+                      youtubeSourceExpanded
+                        ? "aspect-video max-h-[min(200px,32vh)] max-w-full"
+                        : "aspect-video max-h-[68px] max-w-full opacity-[0.94]",
+                    )}
+                  />
+                </div>
+              </aside>
+
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden sm:border-l sm:border-stone-900/48">
+                <DesktopTransportBar
+                  duration={duration}
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
+                  timelineIdle={timelineIdle}
+                  loopPlaybackEnabled={loopPlaybackEnabled}
+                  canEnableLoopPlayback={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  loopPracticeScope={loopPracticeScope}
+                  hasActivePhrase={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  phraseHasFocusRegions={phraseHasFocusRegions}
+                  regionContextActive={regionContextActive}
+                  activeLoopId={activeLoopId}
+                  editableLoopId={editableLoopId}
+                  onToggleEditContext={handleTransportEditContext}
+                  onDeleteContext={handleTransportDeleteContext}
+                  tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+                  onTogglePlay={handleTransportTogglePlay}
+                  onRestartLoop={handleRestartLoop}
+                  onCycleLoopPlaybackMode={() => cycleLoopPlaybackMode()}
+                  onTempoSlider={handleTransportTempo}
+                  formatTime={(t) => formatTime(t)}
+                  interactionModeChip={{
+                    editingEnabled: youtubeStructuralEditActive,
+                  }}
+                />
+                <div className="min-h-0 flex-1 overflow-y-auto border-t border-stone-900/40 bg-[#070605]/90">
+                  <DesktopInspectorPanel
+                    practiceFocusLayout={practiceFocusZen}
+                    onDismissPracticeFocusLayout={dismissPracticeFocusZen}
+                    onFocusChipHover={setLinkedFocusHoverId}
+                    timelineHoverSegmentId={linkedFocusHoverId}
+                  />
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </section>
   );
-}
+});
 
 function youtubeClamp(value: number, low: number, high: number) {
   return Math.min(high, Math.max(low, value));

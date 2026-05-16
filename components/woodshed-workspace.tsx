@@ -22,15 +22,15 @@ import {
 } from "@/components/onboarding/desktop-waveform-onboarding";
 import { DemoProjectOrientationRibbon } from "@/components/onboarding/demo-project-orientation-ribbon";
 import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
-import { YoutubeWorkspace } from "@/components/youtube-workspace";
+import {
+  YoutubeWorkspace,
+  type YoutubeWorkspaceHandle,
+} from "@/components/youtube-workspace";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
 import {
   MobilePracticeControls,
 } from "@/components/mobile-practice-panel";
-import {
-  MobileProjectBottomSheet,
-} from "@/components/mobile-project-practice";
 import { MiniMap } from "@/components/mini-map";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { installWaveformPinchZoom } from "@/lib/waveform-mobile-pinch";
@@ -100,6 +100,11 @@ import { parseYoutubePasteForMediaSource } from "@/lib/youtube/youtube-import";
 import { NEUTRAL_TIMELINE_PROTOTYPE_ENABLED } from "@/components/neutral-timeline/constants";
 import { NeutralTimelinePrototype } from "@/components/neutral-timeline/neutral-timeline-prototype";
 import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
+import {
+  enterFocusLoopStructuralEdit,
+  enterPracticeSectionStructuralEdit,
+  isStructuralPracticeMode,
+} from "@/lib/woodshed-enter-region-edit";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
 import { cn } from "@/lib/utils";
@@ -297,15 +302,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const pinchZoomReleaseRef = useRef<(() => void) | null>(null);
 
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-  /**
-   * Central playback facade for Phase 1 (YouTube prep): transport, seeks, loop-clock reads,
-   * and tempo application must go through `MediaPlaybackSurface`, not raw WaveSurfer.
-   * Waveform/regions/zoom/load remain on `wavesurferRef`.
-   */
-  const getPlaybackSurface = useCallback((): MediaPlaybackSurface | null => {
-    const ws = wavesurferRef.current;
-    return ws ? createWaveSurferPlaybackSurface(ws) : null;
-  }, []);
+  const youtubeWorkspaceRef = useRef<YoutubeWorkspaceHandle | null>(null);
   const regionsRef = useRef<RegionsHandle | null>(null);
   const phraseHandleDiagCleanupRef = useRef<(() => void) | null>(null);
 
@@ -329,8 +326,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const [projectPickerOpenSignal, setProjectPickerOpenSignal] = useState(0);
   const [importChoiceOpen, setImportChoiceOpen] = useState(false);
   const [youtubeLinkDraft, setYoutubeLinkDraft] = useState("");
-  const [mobileYtProjectSheetOpen, setMobileYtProjectSheetOpen] =
-    useState(false);
   const deferredUploadHydrationRef = useRef<
     | {
         meta: StoredProjectMeta;
@@ -338,6 +333,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
     | undefined
   >(undefined);
+  /** Resume demo load after leaving YouTube shell (WaveSurfer mounts on next paint). */
+  const deferredDemoLoadRef = useRef(false);
+  /** Object URL for ingest when WaveSurfer is not mounted yet (e.g. leaving YouTube). */
+  const pendingWaveSurferObjectUrlRef = useRef<string | null>(null);
   const [waveSurferEpoch, setWaveSurferEpoch] = useState(0);
   const hydrateProjectFnRef = useRef<
     (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => Promise<void>
@@ -384,6 +383,19 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   );
   const youtubeShellActive =
     YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED && mediaSourceKind === "youtube";
+
+  /**
+   * Central playback facade for Phase 1 (YouTube prep): transport, seeks, loop-clock reads,
+   * and tempo application must go through `MediaPlaybackSurface`, not raw WaveSurfer.
+   * Waveform/regions/zoom/load remain on `wavesurferRef`.
+   */
+  const getPlaybackSurface = useCallback((): MediaPlaybackSurface | null => {
+    if (youtubeShellActive) {
+      return youtubeWorkspaceRef.current?.getPlaybackSurface() ?? null;
+    }
+    const ws = wavesurferRef.current;
+    return ws ? createWaveSurferPlaybackSurface(ws) : null;
+  }, [youtubeShellActive]);
 
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === activeLoopId),
@@ -871,7 +883,31 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const loadBuiltInDemoProject = useCallback(async (): Promise<boolean> => {
     const ws = wavesurferRef.current;
-    if (!ws) return false;
+    if (!ws) {
+      deferredDemoLoadRef.current = true;
+      deferredUploadHydrationRef.current = undefined;
+      if (pendingWaveSurferObjectUrlRef.current) {
+        URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+        pendingWaveSurferObjectUrlRef.current = null;
+      }
+      setMobileEditModeActive(false);
+      pendingHydration.current = null;
+      pendingDemoHydrationRef.current = null;
+      useWoodshedStore.getState().resetWorkspace();
+      useWoodshedStore.getState().setProjectMeta(
+        DEMO_PROJECT_ID,
+        demoPickerTitle,
+        { ...DEFAULT_UPLOAD_MEDIA_SOURCE },
+      );
+      setAudioTimelineLoading(true);
+      audioBlobRef.current = null;
+      loopsSignature.current = "";
+      return false;
+    }
+
+    deferredDemoLoadRef.current = false;
+    deferredUploadHydrationRef.current = undefined;
+
     setMobileEditModeActive(false);
     pendingHydration.current = null;
     pendingDemoHydrationRef.current = null;
@@ -900,7 +936,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       setAudioTimelineLoading(false);
       return false;
     }
-  }, [primeWaveformCaches]);
+  }, [primeWaveformCaches, demoPickerTitle]);
 
   useEffect(() => {
     if (youtubeShellActive) {
@@ -1309,6 +1345,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         unregisterWaveSurferDiagInstance();
       }
       wavesurferRef.current = null;
+      if (pendingWaveSurferObjectUrlRef.current) {
+        URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+        pendingWaveSurferObjectUrlRef.current = null;
+      }
     };
   }, [youtubeShellActive]);
 
@@ -1319,6 +1359,32 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (!pending) return;
     deferredUploadHydrationRef.current = undefined;
     void hydrateProjectFnRef.current(pending.meta, pending.options);
+  }, [youtubeShellActive, waveSurferEpoch]);
+
+  useEffect(() => {
+    if (youtubeShellActive) return;
+    if (!wavesurferRef.current || !deferredDemoLoadRef.current) return;
+    void loadBuiltInDemoProject().then((ok) => {
+      if (ok) void listProjects().then(setProjectsList);
+    });
+  }, [youtubeShellActive, waveSurferEpoch, loadBuiltInDemoProject]);
+
+  useEffect(() => {
+    if (youtubeShellActive) return;
+    const ws = wavesurferRef.current;
+    const url = pendingWaveSurferObjectUrlRef.current;
+    if (!ws || !url) return;
+    pendingWaveSurferObjectUrlRef.current = null;
+    void (async () => {
+      try {
+        await ws.load(url);
+        await listProjects().then(setProjectsList);
+      } catch {
+        devError("Failed to load waveform");
+        setAudioTimelineLoading(false);
+        URL.revokeObjectURL(url);
+      }
+    })();
   }, [youtubeShellActive, waveSurferEpoch]);
 
   useEffect(() => {
@@ -1623,6 +1689,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               loopPracticeScope,
               phraseHasSegForRegions,
             );
+            const onDesktopFocusDblClick = (ev: MouseEvent) => {
+              if (!isStructuralPracticeMode()) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              enterFocusLoopStructuralEdit(renderedLoop.id, seg.id);
+            };
+            el.addEventListener("dblclick", onDesktopFocusDblClick);
           }
         });
 
@@ -1730,6 +1803,15 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           loopPracticeScope,
           phraseHasSegForRegions,
         );
+        if (!isMobilePractice) {
+          const onDesktopPhraseDblClick = (ev: MouseEvent) => {
+            if (!isStructuralPracticeMode()) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            enterPracticeSectionStructuralEdit(loop.id);
+          };
+          el.addEventListener("dblclick", onDesktopPhraseDblClick);
+        }
         if (isMobilePractice && !mobilePhraseRefine) {
           el.style.pointerEvents = "none";
         } else if (allowResize) {
@@ -1869,12 +1951,11 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   }, []);
 
   const ingestFile = useCallback(async (blob: Blob) => {
-    const ws = wavesurferRef.current;
-    if (!ws) return;
-
     setMobileEditModeActive(false);
     setAudioTimelineLoading(true);
     pendingDemoHydrationRef.current = null;
+    deferredUploadHydrationRef.current = undefined;
+    deferredDemoLoadRef.current = false;
 
     useWoodshedStore.getState().resetWorkspace();
     audioBlobRef.current =
@@ -1883,25 +1964,34 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
     await primeWaveformCaches(audioBlobRef.current);
 
+    const displayName =
+      blob instanceof File
+        ? formatFilenameAsProjectName(blob.name)
+        : "Woodshed session";
+    const uploadMediaSource =
+      blob instanceof File
+        ? {
+            kind: "upload" as const,
+            blobId: null,
+            fileName: blob.name,
+            mimeType: blob.type || null,
+          }
+        : { ...DEFAULT_UPLOAD_MEDIA_SOURCE };
+    useWoodshedStore
+      .getState()
+      .setProjectMeta(nanoid(), displayName, uploadMediaSource);
+
+    const ws = wavesurferRef.current;
     try {
       const url = URL.createObjectURL(blob);
+      if (!ws) {
+        if (pendingWaveSurferObjectUrlRef.current) {
+          URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+        }
+        pendingWaveSurferObjectUrlRef.current = url;
+        return;
+      }
       await ws.load(url);
-      const displayName =
-        blob instanceof File
-          ? formatFilenameAsProjectName(blob.name)
-          : "Woodshed session";
-      const uploadMediaSource =
-        blob instanceof File
-          ? {
-              kind: "upload" as const,
-              blobId: null,
-              fileName: blob.name,
-              mimeType: blob.type || null,
-            }
-          : { ...DEFAULT_UPLOAD_MEDIA_SOURCE };
-      useWoodshedStore
-        .getState()
-        .setProjectMeta(nanoid(), displayName, uploadMediaSource);
       await listProjects().then(setProjectsList);
     } catch {
       devError("Failed to load waveform");
@@ -1942,7 +2032,28 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       const ws = wavesurferRef.current;
       if (!ws) {
         deferredUploadHydrationRef.current = { meta, options };
+        deferredDemoLoadRef.current = false;
+        if (pendingWaveSurferObjectUrlRef.current) {
+          URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+          pendingWaveSurferObjectUrlRef.current = null;
+        }
+        setMobileEditModeActive(false);
+        pendingDemoHydrationRef.current = null;
+        pendingHydration.current = null;
+        useWoodshedStore.getState().resetWorkspace();
+        useWoodshedStore
+          .getState()
+          .setProjectMeta(meta.id, meta.name, normalized);
+        setAudioTimelineLoading(true);
+        loopsSignature.current = "";
+        audioBlobRef.current = null;
         return;
+      }
+      deferredDemoLoadRef.current = false;
+      deferredUploadHydrationRef.current = undefined;
+      if (pendingWaveSurferObjectUrlRef.current) {
+        URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+        pendingWaveSurferObjectUrlRef.current = null;
       }
       setMobileEditModeActive(false);
       pendingDemoHydrationRef.current = null;
@@ -2487,6 +2598,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           return;
         }
         setMobileEditModeActive(false);
+        deferredUploadHydrationRef.current = undefined;
+        deferredDemoLoadRef.current = false;
+        if (pendingWaveSurferObjectUrlRef.current) {
+          URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+          pendingWaveSurferObjectUrlRef.current = null;
+        }
         pendingDemoHydrationRef.current = null;
         pendingHydration.current = null;
         hydrateYoutubeDexieIntoStore(v.meta);
@@ -2537,16 +2654,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     setProjectPickerOpenSignal((n) => n + 1);
   }, []);
 
-  const handledYtMobilePickerSignalRef = useRef(0);
-  useEffect(() => {
-    if (!isMobilePractice || !youtubeShellActive) return;
-    if (projectPickerOpenSignal <= handledYtMobilePickerSignalRef.current) {
-      return;
-    }
-    handledYtMobilePickerSignalRef.current = projectPickerOpenSignal;
-    setMobileYtProjectSheetOpen(true);
-  }, [isMobilePractice, youtubeShellActive, projectPickerOpenSignal]);
-
   const openDemoFromEmptyWorkspace = useCallback(() => {
     void handleRestoreProject(DEMO_PROJECT_ID);
   }, [handleRestoreProject]);
@@ -2575,6 +2682,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     setImportChoiceOpen(false);
     setYoutubeLinkDraft("");
     setMobileEditModeActive(false);
+    deferredUploadHydrationRef.current = undefined;
+    deferredDemoLoadRef.current = false;
+    if (pendingWaveSurferObjectUrlRef.current) {
+      URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+      pendingWaveSurferObjectUrlRef.current = null;
+    }
     pendingDemoHydrationRef.current = null;
     pendingHydration.current = null;
     audioBlobRef.current = null;
@@ -2590,27 +2703,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const handleEmptyWorkspaceCreateProject = useCallback(() => {
     if (YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) openImportChoiceModal();
     else fileInputRef.current?.click();
-  }, [openImportChoiceModal]);
-
-  const mobileYtPickProjectThenCloseSheet = useCallback(
-    async (id: string) => {
-      await handleRestoreProject(id);
-      setMobileYtProjectSheetOpen(false);
-    },
-    [handleRestoreProject],
-  );
-
-  const mobileYtOpenAudioFromSheet = useCallback(() => {
-    setMobileYtProjectSheetOpen(false);
-    window.requestAnimationFrame(() => {
-      if (YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) openImportChoiceModal();
-      else fileInputRef.current?.click();
-    });
-  }, [openImportChoiceModal]);
-
-  const mobileYtPasteYoutubeFromSheet = useCallback(() => {
-    setMobileYtProjectSheetOpen(false);
-    window.requestAnimationFrame(() => openImportChoiceModal());
   }, [openImportChoiceModal]);
 
   return (
@@ -2683,54 +2775,89 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         />
       ) : null}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         <div
           className={cn(
             "min-h-0 min-w-0 flex-1",
-            isMobilePractice
-              ? "grid h-full w-full min-h-0 grid-rows-[1fr_auto]"
-              : "flex flex-col",
+            isMobilePractice &&
+              !youtubeShellActive &&
+              "grid h-full w-full min-h-0 grid-rows-[1fr_auto]",
+            isMobilePractice &&
+              youtubeShellActive &&
+              "flex min-h-0 min-w-0 flex-col overflow-hidden",
+            !isMobilePractice && "flex flex-col",
           )}
         >
           {isMobilePractice ? (
             youtubeShellActive ? (
-              <>
-                <div className="flex min-[769px]:hidden shrink-0 items-center gap-2 border-b border-stone-800/55 bg-stone-950/95 px-3 py-2">
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-lg border border-stone-700/55 bg-stone-900/75 px-3 py-2 text-[13px] font-medium text-stone-100 touch-manipulation"
-                    onClick={() => setMobileYtProjectSheetOpen(true)}
-                  >
-                    Projects…
-                  </button>
-                  <span className="min-w-0 flex-1 truncate text-center text-[13px] font-medium text-stone-300">
-                    {projectName}
-                  </span>
-                </div>
-                <YoutubeWorkspace
-                  key={projectId ?? "youtube-session"}
-                  variant="embedded"
-                  className="min-h-0 min-w-0 flex-1"
-                />
-                <MobileProjectBottomSheet
-                  isOpen={mobileYtProjectSheetOpen}
-                  onClose={() => setMobileYtProjectSheetOpen(false)}
+              <YoutubeWorkspace
+                ref={youtubeWorkspaceRef}
+                key={projectId ?? "youtube-session"}
+                variant="embedded"
+                mobileStackedLayout
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+              >
+                <MobilePracticeControls
+                  fileInputRef={fileInputRef}
+                  fileAccept={MOBILE_AUDIO_INPUT_ACCEPT}
+                  onFileInputChange={handleMobileFileInputChange}
+                  projectName={projectName}
+                  isDemoProject={isDemoProject}
                   sessionSelectValue={sessionSelectValue}
                   demoProjectId={DEMO_PROJECT_ID}
                   demoProjectLabel={demoPickerTitle}
                   userProjects={userProjectsSelectable}
                   cloudProjects={cloudProjects}
                   showCloudSessions={showCloudSessions}
-                  onSelectProject={mobileYtPickProjectThenCloseSheet}
-                  onOpenAudioFile={mobileYtOpenAudioFromSheet}
+                  onRestoreProject={handleRestoreProject}
+                  saveStatusMessage={saveStatusMessage}
+                  saveStatusTone={saveStatusTone}
+                  cloudListError={cloudListError}
+                  activePhraseName={activePhraseName}
+                  isPlaying={isPlaying}
+                  duration={duration}
+                  currentTime={currentTime}
+                  tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}
+                  loopPlaybackEnabled={loopPlaybackEnabled}
+                  canEnableLoopPlayback={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  loopPracticeScope={loopPracticeScope}
+                  phraseHasFocusRegions={phraseHasFocusRegions}
+                  onCycleLoopPlaybackMode={() =>
+                    useWoodshedStore.getState().cycleLoopPlaybackMode()
+                  }
+                  onTogglePlay={handleTransportTogglePlay}
+                  onTempoSlider={handleTransportTempo}
+                  onResetTempoTo100={handleResetTempo100}
+                  loops={loops}
+                  activeLoopId={activeLoopId}
+                  onSelectPhrase={handleMobilePhraseSelect}
+                  focusSegments={activeLoop?.segments ?? []}
+                  onRestartPractice={handleMobileRestartPractice}
+                  onSelectFocusSegment={handleMobileFocusSegmentSelect}
+                  canRestartPractice={Boolean(
+                    activeLoop && activeLoop.end > activeLoop.start,
+                  )}
+                  focusChipSelectedSegmentId={mobileFocusChipSelectedId}
+                  projectPickerOpenSignal={projectPickerOpenSignal}
+                  timelineIdle={playbackChromeIdle}
+                  mobileEditModeActive={mobileEditModeActive}
+                  onEnterMobileEditMode={enterMobileEditMode}
+                  onExitMobileEditMode={exitMobileEditMode}
                   showYoutubeImport={YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED}
                   onPasteYoutubeLink={
                     YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
-                      ? mobileYtPasteYoutubeFromSheet
+                      ? openImportChoiceModal
+                      : undefined
+                  }
+                  onOpenAudioFromProjectPicker={
+                    YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED
+                      ? openImportChoiceModal
                       : undefined
                   }
                 />
-              </>
+              </YoutubeWorkspace>
             ) : (
               <>
                 <div
@@ -2823,6 +2950,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           ) : null}
           {!isMobilePractice && youtubeShellActive ? (
             <YoutubeWorkspace
+              ref={youtubeWorkspaceRef}
               key={projectId ?? "youtube-session"}
               variant="embedded"
               className="min-h-0 min-w-0 flex-1"

@@ -23,6 +23,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { markDesktopFocusLoopCreatedByUser } from "@/lib/onboarding/desktop-milestones";
 import type { PhraseSegment } from "@/lib/loop-engine";
+import {
+  enterFocusLoopStructuralEdit,
+  enterPracticeSectionStructuralEdit,
+  isStructuralPracticeMode,
+} from "@/lib/woodshed-enter-region-edit";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 const STORAGE_EXPANDED = "woodshed-desktop-inspector-open";
@@ -55,10 +60,36 @@ function formatPhraseTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
+export type DesktopInspectorPanelProps = {
+  /**
+   * Immersive practice chrome — inspector body hidden; metadata sections collapsed.
+   */
+  practiceFocusLayout?: boolean;
+  /** User explicitly expands inspector / dismisses practice-focus shell (e.g. parent clears zen). */
+  onDismissPracticeFocusLayout?: () => void;
+  /** Focus chip hover linkage to synthetic timeline regions. */
+  onFocusChipHover?: (segmentId: string | null) => void;
+  /** Incoming hover from the timeline (paired with {@link onFocusChipHover}). */
+  timelineHoverSegmentId?: string | null;
+};
+
+export const DesktopInspectorPanel = memo(function DesktopInspectorPanel(
+  props: DesktopInspectorPanelProps,
+) {
+  const practiceFocusLayout = Boolean(props.practiceFocusLayout);
+  const onDismissPracticeFocusLayout = props.onDismissPracticeFocusLayout;
+  const onFocusChipHover = props.onFocusChipHover;
+  const timelineHoverSegmentId = props.timelineHoverSegmentId ?? null;
+
   const [expanded, setExpanded] = useState(true);
   const [notesOpen, setNotesOpen] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  /** Local pointer hover — paired with timeline via {@link timelineHoverSegmentId}. */
+  const [focusChipPointerHover, setFocusChipPointerHover] = useState<
+    string | null
+  >(null);
+
+  const effectiveExpanded = expanded && !practiceFocusLayout;
 
   useEffect(() => {
     setExpanded(readBoolSession(STORAGE_EXPANDED, true));
@@ -147,9 +178,15 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
 
   useEffect(() => {
     if (!inspectorFocusRequestId) return;
+    onDismissPracticeFocusLayout?.();
     persistExpanded(true);
     persistAdvancedOpen(true);
-  }, [inspectorFocusRequestId, persistExpanded, persistAdvancedOpen]);
+  }, [
+    inspectorFocusRequestId,
+    persistExpanded,
+    persistAdvancedOpen,
+    onDismissPracticeFocusLayout,
+  ]);
 
   useEffect(() => {
     if (!inspectorFocusRequestId || !advancedOpen || !activeSegment) return;
@@ -335,7 +372,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
       }
     });
     return () => window.cancelAnimationFrame(id);
-  }, [focusChipRenameSegmentId, expanded]);
+  }, [focusChipRenameSegmentId, effectiveExpanded]);
 
   const commitPhraseRename = useCallback(() => {
     if (!activeLoop) return;
@@ -349,7 +386,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
   }, [activeLoop, phraseNameDraft, renameLoop]);
 
   useLayoutEffect(() => {
-    if (expanded || !activeLoop) return;
+    if (effectiveExpanded || !activeLoop) return;
     const el = zenScrollRef.current;
     if (!el) return;
 
@@ -371,19 +408,34 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [expanded, activeLoop?.id, focusRegionRows, activeSegmentId, zenShowAdd]);
+  }, [
+    effectiveExpanded,
+    activeLoop?.id,
+    focusRegionRows,
+    activeSegmentId,
+    zenShowAdd,
+  ]);
 
-  const zenFocusPillClass = (selected: boolean) =>
+  const chipLinkHoverActive = useCallback((segmentId: string) => {
+    const fromPointer = focusChipPointerHover === segmentId;
+    const fromTimeline =
+      timelineHoverSegmentId !== null && timelineHoverSegmentId === segmentId;
+    return fromPointer || fromTimeline;
+  }, [focusChipPointerHover, timelineHoverSegmentId]);
+
+  const zenFocusPillClass = (selected: boolean, hoveredFromChip: boolean) =>
     cn(
-      "shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all",
+      "shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-[border-color,background-color,box-shadow,color] duration-200",
       selected
-        ? "border-amber-400/55 bg-amber-500/20 text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]"
-        : "border-stone-600/75 bg-stone-950/45 text-stone-400 hover:border-stone-500 hover:bg-stone-900/55 hover:text-stone-200",
+        ? "border-emerald-400/45 bg-emerald-500/18 text-emerald-50 shadow-[inset_0_0_0_1px_rgba(167,243,208,0.28),0_0_16px_rgba(16,185,129,0.09)]"
+        : hoveredFromChip
+          ? "border-emerald-400/28 bg-emerald-950/55 text-emerald-100/92"
+          : "border-stone-600/75 bg-stone-950/45 text-stone-400 hover:border-emerald-500/25 hover:bg-stone-900/55 hover:text-stone-100",
     );
 
   const phraseContextRow =
     duration && activeLoop ? (
-      <div className="flex shrink-0 items-center gap-1 border-b border-stone-800/40 bg-[#060504]/98 px-2 py-1.5 sm:px-3">
+      <div className="flex shrink-0 items-center gap-1 border-b border-stone-900/38 bg-[#060504]/95 px-2 py-1 sm:px-2.5">
         <Button
           type="button"
           variant="ghost"
@@ -421,9 +473,22 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
           ) : (
             <button
               type="button"
-              title="Double-click to rename phrase"
+              title={
+                isStructuralPracticeMode()
+                  ? "Double-click to edit phrase on waveform"
+                  : "Double-click to rename phrase"
+              }
               className="flex w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-full border border-stone-700/60 bg-stone-950/55 py-1.5 pl-3 pr-2.5 text-left transition-colors hover:border-stone-600 hover:bg-stone-900/55"
-              onDoubleClick={() => {
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                if (!activeLoop) return;
+                if (isStructuralPracticeMode()) {
+                  enterPracticeSectionStructuralEdit(activeLoop.id);
+                  return;
+                }
+                if (practiceFocusLayout) {
+                  onDismissPracticeFocusLayout?.();
+                }
                 setFocusChipRenameSegmentId(null);
                 setPhraseRenameOpen(true);
               }}
@@ -465,12 +530,22 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
           variant="ghost"
           size="icon"
           className="h-7 w-7 shrink-0 text-stone-500 hover:bg-stone-900/60 hover:text-stone-200"
-          aria-expanded={expanded}
-          aria-label={expanded ? "Minimize inspector" : "Expand inspector"}
-          title={expanded ? "Minimize inspector" : "Expand inspector"}
-          onClick={() => persistExpanded(!expanded)}
+          aria-expanded={effectiveExpanded}
+          aria-label={
+            effectiveExpanded ? "Minimize inspector" : "Expand inspector"
+          }
+          title={effectiveExpanded ? "Minimize inspector" : "Expand inspector"}
+          onClick={() => {
+            if (effectiveExpanded) persistExpanded(false);
+            else {
+              if (practiceFocusLayout) {
+                onDismissPracticeFocusLayout?.();
+              }
+              persistExpanded(true);
+            }
+          }}
         >
-          {expanded ? (
+          {effectiveExpanded ? (
             <ChevronDown className="h-4 w-4" aria-hidden />
           ) : (
             <ChevronUp className="h-4 w-4" aria-hidden />
@@ -480,10 +555,10 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
     ) : null;
 
   const collapsedFocusPills =
-    duration && activeLoop && !expanded ? (
+    duration && activeLoop && !effectiveExpanded ? (
       <div
         ref={zenScrollRef}
-        className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-stone-800/30 bg-[#060504]/98 px-2 py-1.5 sm:px-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-stone-900/32 bg-[#060504]/95 px-2 py-1 sm:px-2.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         role="list"
         aria-label="Focus regions"
       >
@@ -509,8 +584,12 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
                 }
               }}
               className={cn(
-                zenFocusPillClass(seg.id === activeSegmentId),
-                "h-[26px] min-w-[5.5rem] max-w-[12rem] bg-stone-950/95 font-sans outline-none placeholder:text-stone-600 focus-visible:ring-2 focus-visible:ring-amber-500/35",
+                zenFocusPillClass(
+                  seg.id === activeSegmentId,
+                  chipLinkHoverActive(seg.id) &&
+                    seg.id !== activeSegmentId,
+                ),
+                "h-[26px] min-w-[5.5rem] max-w-[12rem] bg-stone-950/95 font-sans outline-none placeholder:text-stone-600 focus-visible:ring-2 focus-visible:ring-emerald-500/40",
               )}
               placeholder="Focus Loop name"
             />
@@ -520,13 +599,33 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               type="button"
               role="listitem"
               data-zen-focus-pill
-              title="Double-click to rename Focus Loop"
+              title={
+                isStructuralPracticeMode()
+                  ? "Double-click to edit Focus Loop on waveform"
+                  : "Double-click to rename Focus Loop"
+              }
               onClick={() => selectSegment(activeLoop.id, seg.id)}
+              onPointerEnter={() => {
+                setFocusChipPointerHover(seg.id);
+                onFocusChipHover?.(seg.id);
+              }}
+              onPointerLeave={() => {
+                setFocusChipPointerHover(null);
+                onFocusChipHover?.(null);
+              }}
               onDoubleClick={(e) => {
                 e.preventDefault();
-                beginFocusChipRename(seg);
+                if (isStructuralPracticeMode()) {
+                  enterFocusLoopStructuralEdit(activeLoop.id, seg.id);
+                } else {
+                  beginFocusChipRename(seg);
+                }
               }}
-              className={zenFocusPillClass(seg.id === activeSegmentId)}
+              className={zenFocusPillClass(
+                seg.id === activeSegmentId,
+                chipLinkHoverActive(seg.id) &&
+                  seg.id !== activeSegmentId,
+              )}
             >
               {seg.name}
             </button>
@@ -537,7 +636,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
             type="button"
             data-zen-add
             onClick={commitUserAddedFocusSegment}
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-stone-600/75 px-2 py-1 text-[11px] font-medium text-stone-500 transition-colors hover:border-amber-500/35 hover:bg-stone-900/45 hover:text-amber-100/90"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-dashed border-stone-600/65 px-2 py-0.5 text-[11px] font-medium text-stone-500 transition-colors hover:border-emerald-500/35 hover:bg-stone-900/45 hover:text-emerald-100/85"
           >
             <Plus className="h-3 w-3" aria-hidden />
             + Add
@@ -610,7 +709,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
 
   const activePhraseBody =
     duration && activeLoop ? (
-      <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3 pt-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-2.5 pt-1.5">
         {activeSegment && !phraseRenameOpen ? (
           <p className="-mt-1 shrink-0 text-[10px] text-stone-600">
             Editing focus:{" "}
@@ -619,8 +718,8 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
         ) : null}
 
         {/* Focus regions — primary inspector content */}
-        <div className="flex min-h-[5.5rem] flex-1 flex-col rounded-xl border border-stone-700/55 bg-gradient-to-b from-stone-900/35 to-stone-950/60 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-          <div className="mb-2.5 flex items-center justify-between gap-2">
+        <div className="flex min-h-[4.75rem] flex-1 flex-col rounded-lg border border-stone-800/42 bg-gradient-to-b from-stone-900/28 to-stone-950/55 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-stone-200">
               Focus regions
             </p>
@@ -629,7 +728,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
             </span>
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-2">
-            <div className="flex min-h-[2.75rem] flex-1 flex-wrap content-start items-center gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-h-[2.5rem] flex-1 flex-wrap content-start items-center gap-1.5 overflow-x-auto pb-px [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {focusRegionRows.map((seg) =>
                 focusChipRenameSegmentId === seg.id ? (
                   <input
@@ -651,9 +750,9 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
                       }
                     }}
                     className={cn(
-                      "h-9 shrink-0 rounded-full border px-4 py-2 text-[13px] font-semibold outline-none transition-all focus-visible:ring-2 focus-visible:ring-amber-500/35",
+                      "h-9 shrink-0 rounded-full border px-4 py-2 text-[13px] font-semibold outline-none transition-all focus-visible:ring-2 focus-visible:ring-emerald-500/35",
                       seg.id === activeSegmentId
-                        ? "border-amber-400/55 bg-amber-500/25 text-amber-50 placeholder:text-amber-200/55"
+                        ? "border-emerald-400/45 bg-emerald-500/20 text-emerald-50 placeholder:text-emerald-200/55"
                         : "border-stone-600/80 bg-stone-950/95 text-stone-200 placeholder:text-stone-600",
                     )}
                     placeholder="Focus Loop name"
@@ -662,17 +761,35 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
                   <button
                     key={seg.id}
                     type="button"
-                    title="Double-click to rename Focus Loop"
+                    title={
+                      isStructuralPracticeMode()
+                        ? "Double-click to edit Focus Loop on waveform"
+                        : "Double-click to rename Focus Loop"
+                    }
                     onClick={() => selectSegment(activeLoop.id, seg.id)}
+                    onPointerEnter={() => {
+                      setFocusChipPointerHover(seg.id);
+                      onFocusChipHover?.(seg.id);
+                    }}
+                    onPointerLeave={() => {
+                      setFocusChipPointerHover(null);
+                      onFocusChipHover?.(null);
+                    }}
                     onDoubleClick={(e) => {
                       e.preventDefault();
-                      beginFocusChipRename(seg);
+                      if (isStructuralPracticeMode()) {
+                        enterFocusLoopStructuralEdit(activeLoop.id, seg.id);
+                      } else {
+                        beginFocusChipRename(seg);
+                      }
                     }}
                     className={cn(
-                      "shrink-0 rounded-full border px-4 py-2 text-[13px] font-semibold transition-all",
+                      "shrink-0 rounded-full border px-3.5 py-1.5 text-[13px] font-semibold transition-[border-color,background-color,box-shadow,color] duration-200",
                       seg.id === activeSegmentId
-                        ? "border-amber-400/55 bg-amber-500/20 text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]"
-                        : "border-stone-600/80 bg-stone-950/50 text-stone-300 hover:border-amber-500/25 hover:bg-stone-900/70 hover:text-stone-100",
+                        ? "border-emerald-400/45 bg-emerald-500/18 text-emerald-50 shadow-[inset_0_0_0_1px_rgba(167,243,208,0.22),0_0_14px_rgba(16,185,129,0.07)]"
+                        : chipLinkHoverActive(seg.id)
+                          ? "border-emerald-400/28 bg-emerald-950/45 text-emerald-100/90"
+                          : "border-stone-600/75 bg-stone-950/45 text-stone-300 hover:border-emerald-500/22 hover:bg-stone-900/65 hover:text-stone-100",
                     )}
                   >
                     {seg.name}
@@ -682,7 +799,7 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
               <button
                 type="button"
                 onClick={commitUserAddedFocusSegment}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border-2 border-dashed border-stone-600/80 px-4 py-2 text-[13px] font-medium text-stone-400 transition-colors hover:border-amber-500/35 hover:bg-stone-900/40 hover:text-amber-100/90"
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border-2 border-dashed border-stone-600/70 px-3.5 py-1.5 text-[13px] font-medium text-stone-400 transition-colors hover:border-emerald-500/35 hover:bg-stone-900/38 hover:text-emerald-50/92"
               >
                 <Plus className="h-4 w-4" aria-hidden />
                 + Add
@@ -701,11 +818,15 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
         </div>
 
         {/* Notes */}
-        <div className="rounded-lg border border-stone-800/40 bg-stone-950/25">
+        <div className="rounded-md border border-stone-900/45 bg-stone-950/20">
           <button
             type="button"
-            className="flex w-full items-center justify-between px-3 py-2 text-left"
-            onClick={() => persistNotesOpen(!notesOpen)}
+            className="flex w-full items-center justify-between px-3 py-1.5 text-left"
+            onClick={() => {
+              const next = !notesOpen;
+              if (next) onDismissPracticeFocusLayout?.();
+              persistNotesOpen(next);
+            }}
             aria-expanded={notesOpen}
           >
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-stone-400">
@@ -755,11 +876,15 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
         </div>
 
         {/* Advanced */}
-        <div className="rounded-lg border border-stone-800/40 bg-stone-950/20">
+        <div className="rounded-md border border-stone-900/45 bg-stone-950/[0.07]">
           <button
             type="button"
-            className="flex w-full items-center justify-between px-3 py-2 text-left"
-            onClick={() => persistAdvancedOpen(!advancedOpen)}
+            className="flex w-full items-center justify-between px-3 py-1.5 text-left"
+            onClick={() => {
+              const next = !advancedOpen;
+              if (next) onDismissPracticeFocusLayout?.();
+              persistAdvancedOpen(next);
+            }}
             aria-expanded={advancedOpen}
           >
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-stone-500">
@@ -944,15 +1069,16 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
   return (
     <aside
       className={cn(
-        "flex min-w-0 flex-col border-t border-stone-800/50 bg-[#050403]/96 text-stone-300",
-        expanded ? "min-h-0 flex-1" : "shrink-0",
+        "flex min-w-0 flex-col border-t border-stone-900/55 bg-[#050403]/88 text-stone-300 transition-[border-color,background-color,opacity] duration-300",
+        effectiveExpanded ? "min-h-0 flex-1" : "shrink-0",
+        practiceFocusLayout && "border-stone-900/40 opacity-[0.98]",
       )}
       aria-label="Inspector"
     >
       {phraseContextRow}
       {collapsedFocusPills}
-      {!expanded && !phraseContextRow ? (
-        <div className="flex items-center justify-between gap-2 border-b border-stone-800/35 px-3 py-2">
+      {!effectiveExpanded && !phraseContextRow ? (
+        <div className="flex items-center justify-between gap-2 border-b border-stone-900/32 px-2.5 py-1">
           <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-600">
             Session
           </span>
@@ -960,15 +1086,20 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel() {
             type="button"
             variant="ghost"
             className="h-8 gap-1 px-2 text-[11px] text-stone-500 hover:text-stone-300"
-            aria-expanded={expanded}
-            onClick={() => persistExpanded(true)}
+            aria-expanded={effectiveExpanded}
+            onClick={() => {
+              if (practiceFocusLayout) {
+                onDismissPracticeFocusLayout?.();
+              }
+              persistExpanded(true);
+            }}
           >
             Expand
             <ChevronUp className="h-3.5 w-3.5 opacity-70" aria-hidden />
           </Button>
         </div>
       ) : null}
-      {expanded ? (
+      {effectiveExpanded ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {expandedBody}
         </div>

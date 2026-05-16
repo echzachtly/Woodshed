@@ -55,6 +55,18 @@ body {
   scrollbar-width: none;
 }
 
+/**
+ * Synthetic neutral timeline (YouTube / upload-neutral path) — match WaveSurfer: no visible
+ * horizontal scrollbar; pan stays drag/trackpad; wheel zoom uses `neutral-timeline-scrollbar`.
+ */
+.neutral-timeline-scrollbar {
+  scrollbar-width: none;
+}
+.neutral-timeline-scrollbar::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+
 /** Practice phrases list — hide native scrollbar, keep scroll (wheel / trackpad / keyboard). */
 .loop-sidebar-scroll {
   scrollbar-width: thin;

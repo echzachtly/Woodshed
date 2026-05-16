@@ -19,6 +19,32 @@ export function timelineScrollWidthPx(
   return Math.max(logicalWidthPx, vw || logicalWidthPx || 1);
 }
 
+/**
+ * Synthetic timeline content width: **ends at the end of the song** (no faux extension to fill the viewport).
+ * Integer CSS pixels (`ceil(duration × px/sec)`) so canvas + overlays align crisply with ruler time.
+ *
+ * Prefer this over {@link timelineScrollWidthPx} for neutral / iframe timelines where continuation past duration
+ * would read as meaningless “infinite bed”.
+ */
+export function timelineSongContentWidthPx(
+  durationSec: number,
+  pxPerSec: number,
+): number {
+  const logical = timelineLogicalWidthPx(durationSec, pxPerSec);
+  return Math.max(1, Math.ceil(logical - 1e-9));
+}
+
+/**
+ * Left X of the scroll host’s **content box** (inside `padding-left`).
+ * Use when mapping `clientX` + `scrollLeft` → timeline seconds so wheel zoom / seeks match
+ * the WaveSurfer scrollport model (padding must not be treated as song-time offset).
+ */
+export function scrollHostContentLeftClientX(scrollEl: HTMLElement): number {
+  const rect = scrollEl.getBoundingClientRect();
+  const pl = Number.parseFloat(getComputedStyle(scrollEl).paddingLeft);
+  return rect.left + (Number.isFinite(pl) ? pl : 0);
+}
+
 /** Map pointer position within scroll host → seconds [0, duration]. */
 export function pointerClientToSeconds(args: {
   clientX: number;
