@@ -19,6 +19,24 @@ export function shiftDragShouldCreateFocusInsideActivePhrase(
   );
 }
 
+/**
+ * Whether Shift+drag authoring is permitted for `phraseId` (mirrors WaveSurfer
+ * `phraseWaveformEditUnlockedById` transport lock semantics).
+ *
+ * Legacy strips omit `phraseWaveformEditUnlockedById`; then Shift+drag is allowed.
+ */
+export function shiftDragPhraseAuthoringAllowed(args: {
+  authoringEnabled: boolean;
+  phraseWaveformEditUnlockedById?: Record<string, true>;
+  phraseId: string | null | undefined;
+}): boolean {
+  if (!args.authoringEnabled) return false;
+  const map = args.phraseWaveformEditUnlockedById;
+  if (map === undefined) return true;
+  const id = args.phraseId;
+  return Boolean(id != null && id !== "" && map[id]);
+}
+
 /** Map pointer X to song seconds (matches waveform hover logic in workspace). */
 export function pointerClientXToSongSeconds(args: {
   clientX: number;

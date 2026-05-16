@@ -39,8 +39,8 @@ export const SyntheticWaveBedCanvas = memo(function SyntheticWaveBedCanvas(
     ctx.clearRect(0, 0, widthPx, heightPx);
 
     const mid = heightPx * 0.5;
-    /** Low amplitude — clearly secondary to overlays. */
-    const amp = heightPx * 0.13;
+    /** Low amplitude — waveform bed stays subordinate to regions + playhead. */
+    const amp = heightPx * 0.098;
     const step = Math.max(2, Math.ceil(widthPx / 700));
 
     const topY = (t: number) => mid + syntheticWaveNormalized(t) * amp;
@@ -57,9 +57,9 @@ export const SyntheticWaveBedCanvas = memo(function SyntheticWaveBedCanvas(
     ctx.closePath();
 
     const fillGrd = ctx.createLinearGradient(0, 0, 0, heightPx);
-    fillGrd.addColorStop(0, "rgba(224,210,255,0.045)");
-    fillGrd.addColorStop(0.45, "rgba(91,82,74,0.09)");
-    fillGrd.addColorStop(1, "rgba(38,34,31,0.08)");
+    fillGrd.addColorStop(0, "rgba(224,210,255,0.028)");
+    fillGrd.addColorStop(0.45, "rgba(91,82,74,0.055)");
+    fillGrd.addColorStop(1, "rgba(38,34,31,0.045)");
     ctx.fillStyle = fillGrd;
     ctx.fill();
 
@@ -68,7 +68,7 @@ export const SyntheticWaveBedCanvas = memo(function SyntheticWaveBedCanvas(
     for (let x = step; x <= widthPx; x += step) {
       ctx.lineTo(x, topY(x));
     }
-    ctx.strokeStyle = "rgba(224,210,255,0.1)";
+    ctx.strokeStyle = "rgba(224,210,255,0.065)";
     ctx.lineWidth = 1;
     ctx.stroke();
   }, [widthPx, heightPx]);

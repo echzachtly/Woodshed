@@ -203,6 +203,14 @@ export function YoutubeWorkspace() {
       activeLoop?.segments?.some((x) => x.id === activeSegmentId),
   );
 
+  /** Same rule as `{@link SyntheticTimelineAuthoringConfig.enabled}` — any waveform unlock ⇒ Edit Mode. */
+  const youtubeStructuralEditActive = useMemo(
+    () =>
+      Object.keys(phraseWaveformEditUnlockedById).length > 0 ||
+      Object.keys(focusRegionWaveformEditUnlockedById).length > 0,
+    [phraseWaveformEditUnlockedById, focusRegionWaveformEditUnlockedById],
+  );
+
   /** Isolate global session — dev route shares the production store singleton. */
   useEffect(() => {
     resetWorkspace();
@@ -644,11 +652,27 @@ export function YoutubeWorkspace() {
     SyntheticTimelineAuthoringConfig | undefined
   >(() => {
     if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED || !(duration > 0)) return undefined;
+    const phraseUnlockForSynth: Record<string, true> = {
+      ...phraseWaveformEditUnlockedById,
+      ...(youtubeStructuralEditActive && activeLoopId != null
+        ? { [activeLoopId]: true }
+        : {}),
+    };
+
+    const focusUnlockForSynth: Record<string, true> = {
+      ...focusRegionWaveformEditUnlockedById,
+      ...(youtubeStructuralEditActive && activeSegmentId != null
+        ? { [activeSegmentId]: true }
+        : {}),
+    };
+
     return {
-      enabled: true,
+      /** Practice Mode ⇒ false (`phrase`/`focus` unlock maps empty). Edit Mode ⇒ true (matches WaveSurfer). */
+      enabled: youtubeStructuralEditActive,
       activeLoopId,
-      phraseWaveformEditUnlockedById,
-      focusRegionWaveformEditUnlockedById,
+      phraseWaveformEditUnlockedById: phraseUnlockForSynth,
+      focusRegionWaveformEditUnlockedById: focusUnlockForSynth,
+      allowBackdropShiftPhraseDraftWhenPractice: true,
       onShiftPhraseDragCreate: (startSec, endSec) => {
         exitPhraseFitAfterUserNavigation();
         const phrase = createPhraseFromShiftDrag(startSec, endSec);
@@ -682,6 +706,7 @@ export function YoutubeWorkspace() {
     };
   }, [
     activeLoopId,
+    activeSegmentId,
     createFocusSegmentFromShiftDrag,
     createPhraseFromShiftDrag,
     duration,
@@ -695,6 +720,7 @@ export function YoutubeWorkspace() {
     updateLoopBounds,
     updateSegment,
     setCurrentTime,
+    youtubeStructuralEditActive,
   ]);
 
   /** Mirrors `woodshed-workspace` desktop keyboard surface (no mobile branch here). */
@@ -767,6 +793,8 @@ export function YoutubeWorkspace() {
         case "a":
         case "A": {
           if (event.metaKey || event.ctrlKey || event.altKey) break;
+          /** Match synthetic timeline Practice Mode — add phrase only while structurally editable. */
+          if (!youtubeStructuralEditActive) break;
           event.preventDefault();
           useWoodshedStore.getState().addLoopCandidate();
           break;
@@ -819,7 +847,7 @@ export function YoutubeWorkspace() {
           break;
       }
     },
-    [duration, playbackSurface, setCurrentTime, setPlaying],
+    [duration, playbackSurface, setCurrentTime, setPlaying, youtubeStructuralEditActive],
   );
 
   const handleTransportTogglePlay = useCallback(() => {
@@ -838,6 +866,10 @@ export function YoutubeWorkspace() {
     if (!activeLoopId) return;
     if (st.editableLoopId === activeLoopId) {
       st.setEditableLoopId(null);
+      /** Practice Mode: clear focus boundary unlock flags so timeline handles cannot stay armed. */
+      for (const sid of Object.keys(st.focusRegionWaveformEditUnlockedById)) {
+        st.setFocusRegionWaveformEditUnlocked(sid, false);
+      }
       return;
     }
     const loop = st.loops.find((l) => l.id === activeLoopId);
@@ -1017,7 +1049,7 @@ export function YoutubeWorkspace() {
         ref={youtubeDesktopSplitRef}
         className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       >
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a]">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-[#080605] via-[#0b0806] to-[#10080a] shadow-[inset_0_-1px_0_rgba(255,255,255,0.03)]">
           {duration > 0 ? (
             <NeutralTimelinePrototype
               duration={duration}
@@ -1044,7 +1076,7 @@ export function YoutubeWorkspace() {
           aria-orientation="horizontal"
           aria-label="Resize timeline and bottom panel"
           tabIndex={0}
-          className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/40 bg-[#0a0806] outline-none hover:bg-stone-900/90 focus-visible:ring-2 focus-visible:ring-violet-500/40"
+          className="group relative z-20 flex h-2 shrink-0 cursor-ns-resize items-center justify-center border-y border-stone-800/25 bg-[#090807] outline-none hover:bg-[#0c0a09] hover:border-stone-700/35 focus-visible:ring-2 focus-visible:ring-violet-500/40"
           onPointerDown={onYoutubeDesktopBottomResizePointerDown}
           onPointerMove={onYoutubeDesktopBottomResizePointerMove}
           onPointerUp={onYoutubeDesktopBottomResizePointerUp}
@@ -1081,14 +1113,14 @@ export function YoutubeWorkspace() {
         </div>
 
         <div
-          className="flex w-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-stone-800/50 bg-[#050403] sm:flex-row"
+          className="flex w-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-stone-800/38 bg-[#050403]/98 sm:flex-row"
           style={{ maxHeight: desktopBottomStackPx }}
         >
-          <aside className="flex min-h-0 w-full shrink-0 flex-col border-stone-800/60 bg-[#070605] sm:w-[min(280px,34vw)] sm:max-w-[320px] sm:border-r sm:border-stone-800/60">
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-stone-800/70 px-2.5 py-1.5">
+          <aside className="flex min-h-0 w-full shrink-0 flex-col bg-[#060504] sm:w-[min(260px,32vw)] sm:max-w-[300px] sm:border-r sm:border-stone-800/42">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-stone-800/50 px-2.5 py-1">
               <div className="min-w-0">
-                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-stone-500">
-                  YouTube source
+                <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-stone-600">
+                  Source
                 </p>
                 {resolvedId ? (
                   <p
@@ -1103,28 +1135,28 @@ export function YoutubeWorkspace() {
               </div>
               <button
                 type="button"
-                className="shrink-0 rounded-md border border-stone-700/80 bg-stone-900/80 px-2 py-1 text-[10px] font-medium text-stone-300 hover:border-stone-600 hover:bg-stone-800 hover:text-stone-100"
+                className="shrink-0 rounded-md border border-stone-800/85 bg-black/35 px-2 py-0.5 text-[10px] font-medium text-stone-400 hover:border-stone-700 hover:bg-stone-950 hover:text-stone-200"
                 aria-pressed={youtubeSourceExpanded}
                 onClick={() => setYoutubeSourceExpanded((v) => !v)}
               >
                 {youtubeSourceExpanded ? "Smaller" : "Larger"}
               </button>
             </div>
-            <div className="flex min-h-0 flex-1 items-center justify-center p-2 pt-1.5">
+            <div className="flex min-h-0 flex-1 items-center justify-center p-2 pt-1 sm:p-2.5 sm:pb-2">
               <div
                 ref={hostRef}
                 tabIndex={-1}
                 className={cn(
-                  "w-full overflow-hidden rounded-md border border-stone-800/85 bg-black shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none",
+                  "relative w-full overflow-hidden rounded-[10px] border border-white/[0.055] bg-[#050403] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-black/60",
                   youtubeSourceExpanded
-                    ? "aspect-video max-h-[min(220px,35vh)] max-w-full"
-                    : "aspect-video max-h-[76px] max-w-full opacity-[0.96]",
+                    ? "aspect-video max-h-[min(200px,32vh)] max-w-full"
+                    : "aspect-video max-h-[68px] max-w-full opacity-[0.94]",
                 )}
               />
             </div>
           </aside>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden sm:border-l sm:border-stone-900/55">
             <DesktopTransportBar
               duration={duration}
               currentTime={currentTime}
@@ -1151,7 +1183,7 @@ export function YoutubeWorkspace() {
               onTempoSlider={handleTransportTempo}
               formatTime={(t) => formatTime(t)}
             />
-            <div className="min-h-0 flex-1 overflow-y-auto border-t border-stone-800/70 bg-[#070605]/95">
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-stone-800/55 bg-[#070605]/98">
               <DesktopInspectorPanel />
             </div>
           </div>

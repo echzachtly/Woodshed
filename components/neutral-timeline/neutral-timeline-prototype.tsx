@@ -45,7 +45,10 @@ import {
   minPhraseOrSegmentSpanSec,
   secondsDeltaFromPixelDelta,
 } from "@/components/neutral-timeline/synthetic-timeline-regions";
-import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
+import {
+  shiftDragPhraseAuthoringAllowed,
+  shiftDragShouldCreateFocusInsideActivePhrase,
+} from "@/lib/shift-waveform-authoring";
 
 export type SyntheticTimelineAuthoringConfig = {
   enabled: boolean;
@@ -76,6 +79,12 @@ export type SyntheticTimelineAuthoringConfig = {
     startSec: number,
     endSec: number,
   ) => void;
+  /**
+   * YouTube/global Practice Mode: when `enabled` is false, Shift+drag on **empty waveform
+   * backdrop only** still starts a new Practice Section draft; commit enters Edit Mode via store.
+   * Region hits never use this — must not steal in-phrase Shift+ authoring.
+   */
+  allowBackdropShiftPhraseDraftWhenPractice?: boolean;
 };
 
 export type NeutralTimelinePrototypeProps = {
@@ -96,7 +105,9 @@ const TRACK_BAND_PX_DEFAULT = 148;
 const TRACK_BAND_MIN_PX = 92;
 const TRACK_BAND_MAX_PX = 560;
 const PAN_SLOP_PX = 4;
-const PHRASE_BAND_END_FRAC_OF_TRACK = 0.58;
+/** Draft phrase ghost height hint (fraction of track). Focus ghost is vertically centered inside the lane. */
+const PHRASE_GHOST_VERTICAL_FRAC = 0.2;
+const TRACK_VERTICAL_GUTTER_PX = 6;
 
 const noop = () => {};
 const noopNum2 = (_a: number, _b: number) => {};
@@ -132,6 +143,16 @@ type Gesture =
       aSec: number;
       ax: number;
       moved: boolean;
+      /**
+       * When set — Shift+drag began on this Practice Section overlay (body/strip).
+       * Targets that phrase regardless of stale `SyntheticTimelineAuthoringConfig.activeLoopId`
+       * in the gesture closure.
+       */
+      phraseId?: string;
+      /**
+       * Started from backdrop in Practice Mode — phrase draft only (no Focus Loop preview/commit).
+       */
+      backdropPhraseDraftOnly?: boolean;
     }
   | {
       mode: "phraseMove";
@@ -164,6 +185,17 @@ type Gesture =
       ax: number;
       moved: boolean;
     };
+
+/** Phrase for Shift-draft geometry + commits (`phraseId` pins overlay-originated drafts). */
+function resolveDraftShiftPhraseLoop(
+  g: Extract<Gesture, { mode: "draftShift" }>,
+  ctx: SyntheticTimelineAuthoringConfig,
+  loops: PracticeLoop[],
+): PracticeLoop | undefined {
+  const phraseId = g.phraseId ?? ctx.activeLoopId;
+  if (phraseId == null) return undefined;
+  return loops.find((p) => p.id === phraseId);
+}
 
 /** Phrase overlays wide → narrow so nested sections stack like WaveSurfer z-order intuition. */
 function loopsForPhrasePaint(loopsInput: PracticeLoop[]): PracticeLoop[] {
@@ -227,15 +259,10 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
 
   /** Faux waveform band height fills the waveform column minus the ruler row (desktop WaveSurfer parity). */
   const [trackBandPx, setTrackBandPx] = useState(TRACK_BAND_PX_DEFAULT);
-  const phraseStripPx = useMemo(
-    () => trackBandPx * PHRASE_BAND_END_FRAC_OF_TRACK,
-    [trackBandPx],
-  );
-  const focusStripPx = trackBandPx - phraseStripPx;
 
   const auth = authoring;
-  const authOn = Boolean(auth?.enabled);
-  /** Desktop-style maps from `woodshed-store` — omitted on legacy overlay strips (`woodshed-workspace` dev rail). */
+  /** True when authoring config is wired (YouTube/upload neutral path — selection overlay). */
+  const phraseOverlayActive = Boolean(auth);
   const phraseUnlockMapProvided = auth?.phraseWaveformEditUnlockedById !== undefined;
   const focusUnlockMapProvided = auth?.focusRegionWaveformEditUnlockedById !== undefined;
 
@@ -259,14 +286,6 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       focusUnlockMapProvided,
     ],
   );
-
-  const shiftAuthoringAllowed =
-    Boolean(auth?.enabled) &&
-    (!phraseUnlockMapProvided ||
-      Boolean(
-        auth?.activeLoopId &&
-          auth.phraseWaveformEditUnlockedById?.[auth.activeLoopId],
-      ));
 
   const logicalWidth = useMemo(
     () => timelineLogicalWidthPx(duration, pxPerSec),
@@ -416,10 +435,11 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         return "outside" as const;
       const ry = evt.clientY - r.top - RULER_H;
       if (ry < 0) return "ruler" as const;
-      const y = ry;
-      return y <= phraseStripPx ? ("phrase" as const) : ("focus" as const);
+      if (ry > trackBandPx) return "outside" as const;
+      /** Single waveform lane — scrub/pan authoring uses time only (focus vs phrase is decided elsewhere). */
+      return "phrase" as const;
     },
-    [phraseStripPx],
+    [trackBandPx],
   );
 
   const installGestureHooks = useCallback(
@@ -446,22 +466,35 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
         }
 
         if (g.mode === "draftShift") {
-          const shiftAllowed =
-            ctx.enabled &&
-            (!ctx.phraseWaveformEditUnlockedById ||
-              Boolean(
-                ctx.activeLoopId &&
-                  ctx.phraseWaveformEditUnlockedById[ctx.activeLoopId],
-              ));
-          if (!shiftAllowed) return;
+          const bdOnly = g.backdropPhraseDraftOnly === true;
+          if (!bdOnly) {
+            const unlockPhraseId =
+              g.phraseId !== undefined ? g.phraseId : ctx.activeLoopId;
+            const shiftAllowed = shiftDragPhraseAuthoringAllowed({
+              authoringEnabled: ctx.enabled,
+              phraseWaveformEditUnlockedById: ctx.phraseWaveformEditUnlockedById,
+              phraseId: unlockPhraseId,
+            });
+            if (!shiftAllowed) return;
+          }
           if (Math.abs(e.clientX - g.ax) >= PAN_SLOP_PX) g.moved = true;
           if (!g.moved) return;
           const lo = Math.min(g.aSec, secNow);
           const hi = Math.max(g.aSec, secNow);
-          const activePhrase =
-            ctx.activeLoopId != null
-              ? live.loops.find((l) => l.id === ctx.activeLoopId)
-              : undefined;
+
+          if (bdOnly) {
+            const c = clampPhraseStartEnd(lo, hi, live.duration);
+            ghostPhraseRef.current = [c.start, c.end];
+            ghostFocusRef.current = null;
+            bumpGhost();
+            return;
+          }
+
+          const activePhrase = resolveDraftShiftPhraseLoop(
+            g,
+            ctx,
+            live.loops,
+          );
           if (
             shiftDragShouldCreateFocusInsideActivePhrase(activePhrase, lo, hi) &&
             activePhrase
@@ -599,25 +632,33 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
             onSeek(secTap);
             return;
           }
-          const shiftAllowed =
-            ctx.enabled &&
-            (!ctx.phraseWaveformEditUnlockedById ||
-              Boolean(
-                ctx.activeLoopId &&
-                  ctx.phraseWaveformEditUnlockedById[ctx.activeLoopId],
-              ));
-          if (!shiftAllowed) return;
+          const bdOnly = g.backdropPhraseDraftOnly === true;
+
           const fg = ghostFocusDraft;
           const pg = ghostPhraseDraft;
-          const activePhrase =
-            ctx.activeLoopId != null
-              ? live.loops.find((l) => l.id === ctx.activeLoopId)
-              : undefined;
+          const activePhrase = resolveDraftShiftPhraseLoop(g, ctx, live.loops);
           const phraseDur =
             activePhrase && activePhrase.end > activePhrase.start
               ? activePhrase.end - activePhrase.start
               : live.duration;
           const minDur = minPhraseOrSegmentSpanSec(live.duration);
+
+          if (bdOnly) {
+            if (pg && pg[1] - pg[0] >= minDur - 1e-9) {
+              ctx.onShiftPhraseDragCreate(pg[0], pg[1]);
+            }
+            return;
+          }
+
+          const unlockPhraseId =
+            g.phraseId !== undefined ? g.phraseId : ctx.activeLoopId;
+          const shiftAllowed = shiftDragPhraseAuthoringAllowed({
+            authoringEnabled: ctx.enabled,
+            phraseWaveformEditUnlockedById: ctx.phraseWaveformEditUnlockedById,
+            phraseId: unlockPhraseId,
+          });
+          if (!shiftAllowed) return;
+
           if (
             fg &&
             activePhrase &&
@@ -683,6 +724,61 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     [installGestureHooks],
   );
 
+  const beginDraftShiftGesture = useCallback(
+    (
+      event: Pick<
+        ReactPointerEvent<Element>,
+        "pointerId" | "clientX" | "button"
+      >,
+      opts: { scopedPhraseId?: string } = {},
+    ): boolean => {
+      const el = scrollRef.current;
+      if (!el || !(duration > 0) || !auth || event.button !== 0) return false;
+
+      const scoped = opts.scopedPhraseId;
+
+      /** Practice Mode: backdrop-only phrase draft bypasses unlock-map gating (commit unlocks via store). */
+      const backdropPhrasePracticeDraft =
+        !auth.enabled &&
+        Boolean(auth.allowBackdropShiftPhraseDraftWhenPractice) &&
+        scoped === undefined;
+
+      const unlockTarget = scoped ?? auth.activeLoopId ?? undefined;
+      if (!backdropPhrasePracticeDraft) {
+        if (
+          !shiftDragPhraseAuthoringAllowed({
+            authoringEnabled: Boolean(auth.enabled),
+            phraseWaveformEditUnlockedById: auth.phraseWaveformEditUnlockedById,
+            phraseId: unlockTarget,
+          })
+        )
+          return false;
+      }
+
+      gestureRef.current = {
+        mode: "draftShift",
+        pid: event.pointerId,
+        aSec: secsFromClient(event.clientX),
+        ax: event.clientX,
+        moved: false,
+        ...(scoped != null ? { phraseId: scoped } : {}),
+        ...(backdropPhrasePracticeDraft
+          ? { backdropPhraseDraftOnly: true }
+          : {}),
+      };
+      ghostPhraseRef.current = null;
+      ghostFocusRef.current = null;
+      try {
+        el.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      bindGestureHooks(gestureRef.current, auth);
+      return true;
+    },
+    [auth, bindGestureHooks, duration, secsFromClient],
+  );
+
   const onScrubPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
@@ -701,25 +797,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       const band = bandAt(event);
       if (band === "outside") return;
 
-      /** Shift+drag matches desktop store gating when unlock maps are present. */
-      if (shiftAuthoringAllowed && auth && event.shiftKey) {
-        gestureRef.current = {
-          mode: "draftShift",
-          pid: event.pointerId,
-          aSec: secsFromClient(event.clientX),
-          ax: event.clientX,
-          moved: false,
-        };
-        ghostPhraseRef.current = null;
-        ghostFocusRef.current = null;
-        try {
-          el.setPointerCapture(event.pointerId);
-        } catch {
-          /* ignore */
-        }
-        bindGestureHooks(gestureRef.current, auth);
-        return;
-      }
+      /** Shift+drag backdrop — gated per active phrase waveform unlock map. */
+      if (auth && event.shiftKey && beginDraftShiftGesture(event)) return;
 
       gestureRef.current = {
         mode: "pan",
@@ -737,8 +816,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     },
     [
       auth,
-      shiftAuthoringAllowed,
       bandAt,
+      beginDraftShiftGesture,
       bindGestureHooks,
       duration,
       rulerIgnored,
@@ -746,18 +825,23 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
     ],
   );
 
-  /** Overlay shell: selects phrases / consumes hits above the faux waveform. Structural edits use per-loop gates. */
-  const phraseOverlayActive = Boolean(auth && authOn);
-
-  /** Practice Section backdrop — absorbs stray hits; body/handles own dragging. */
   const onPhraseStripPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>, loop: PracticeLoop) => {
       if (!phraseOverlayActive || !auth || event.button !== 0) return;
       if (loop.end <= loop.start) return;
+
+      /** Shift from Practice Section chrome (Edit Mode only) — Practice uses backdrop Shift for new phrases. */
+      if (event.shiftKey) {
+        event.stopPropagation();
+        auth.onSelectPhrase(loop.id);
+        if (auth.enabled) beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
+        return;
+      }
+
       event.stopPropagation();
       auth.onSelectPhrase(loop.id);
     },
-    [auth, phraseOverlayActive],
+    [auth, phraseOverlayActive, beginDraftShiftGesture],
   );
 
   const phraseBodyMoveDown = useCallback(
@@ -765,6 +849,14 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       if (!auth || !phraseOverlayActive || event.button !== 0) return;
       if (!phraseBoundaryEditable(loop.id)) return;
       if (loop.end <= loop.start) return;
+
+      if (event.shiftKey) {
+        event.stopPropagation();
+        auth.onSelectPhrase(loop.id);
+        if (auth.enabled) beginDraftShiftGesture(event, { scopedPhraseId: loop.id });
+        return;
+      }
+
       event.stopPropagation();
       auth.onSelectPhrase(loop.id);
       const el = scrollRef.current;
@@ -785,7 +877,7 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
       }
       bindGestureHooks(gestureRef.current, auth);
     },
-    [auth, phraseBoundaryEditable, phraseOverlayActive, bindGestureHooks],
+    [auth, beginDraftShiftGesture, phraseBoundaryEditable, phraseOverlayActive, bindGestureHooks],
   );
 
   const phraseEdgeResizeDown = useCallback(
@@ -918,17 +1010,34 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
   const phraseGhostDraft = ghostPhraseRef.current;
   const focusGhostDraft = ghostFocusRef.current;
 
-  const regionPointerShell =
-    authOn && auth?.enabled ? "pointer-events-auto" : "pointer-events-none";
+  const phraseGhostH = Math.max(
+    18,
+    Math.min(52, Math.round(trackBandPx * PHRASE_GHOST_VERTICAL_FRAC)),
+  );
+  const focusGhostH = Math.max(26, Math.round(trackBandPx * 0.36));
+  const focusGhostTop = Math.max(
+    TRACK_VERTICAL_GUTTER_PX,
+    Math.round((trackBandPx - focusGhostH) / 2),
+  );
+
+  /** Region overlays receive pointers whenever authoring is wired; Practice Mode uses auth.enabled=false for structural gestures only. */
+  const regionPointerShell = phraseOverlayActive
+    ? "pointer-events-auto"
+    : "pointer-events-none";
+
+  const timelinePracticeCalmChrome = Boolean(auth && phraseOverlayActive && !auth.enabled);
 
   return (
     <div
       ref={hostRef}
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-b border-stone-900/85 bg-[#070605]"
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-b border-stone-800/55 bg-[radial-gradient(ellipse_120%_80%_at_50%_0%,rgba(78,61,118,0.07),transparent_52%),linear-gradient(to_bottom,#0a0908,#070605)] text-stone-100 transition-[opacity,filter] duration-300",
+        timelinePracticeCalmChrome && "opacity-[0.98] saturate-[0.9]",
+      )}
     >
       <div
         ref={scrollRef}
-        className="neutral-timeline-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden px-2 py-2 sm:px-3 sm:py-3"
+        className="neutral-timeline-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden px-3 pb-3 pt-2 sm:px-5 sm:pb-3.5 sm:pt-2.5"
       >
         <div
           ref={scrubRef}
@@ -936,12 +1045,12 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
           style={{ width: Math.max(scrollWidthPx, viewportWidth || 1) }}
           onPointerDown={onScrubPointerDown}
         >
-          <div className="relative" style={{ height: RULER_H }}>
-            <div className="absolute inset-x-0 top-8 h-px bg-stone-800/90" />
+          <div className="relative mb-px" style={{ height: RULER_H }}>
+            <div className="absolute inset-x-0 top-[30px] h-px bg-stone-800/70" />
 
             <div
               data-neutral-timeline-zoom="true"
-              className="absolute right-0 top-1 z-[4] flex items-center gap-1 rounded-md border border-stone-800/85 bg-black/70 px-1 py-0.5 backdrop-blur-sm"
+              className="absolute right-1 top-0.5 z-[4] flex items-center gap-0.5 rounded-lg border border-stone-700/65 bg-black/55 px-0.5 py-px shadow-inner shadow-black/50 backdrop-blur-sm"
             >
               <button
                 type="button"
@@ -995,16 +1104,17 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
           </div>
 
           <div
-            className="relative isolate overflow-visible"
+            className={cn(
+              "relative isolate overflow-visible rounded-xl ring-1 ring-inset shadow-[inset_0_-12px_24px_-20px_rgba(0,0,0,0.45)] transition-[box-shadow] duration-300",
+              timelinePracticeCalmChrome ? "ring-stone-900/42" : "ring-stone-800/28",
+            )}
             style={{ height: trackBandPx }}
           >
             <SyntheticWaveBedCanvas widthPx={scrollWidthPx} heightPx={trackBandPx} />
 
-            <div className="pointer-events-none absolute inset-x-0 top-2 h-px bg-stone-800/65" />
-
             {phraseGhostDraft && phraseGhostDraft[1] > phraseGhostDraft[0] ? (
               <div
-                className="pointer-events-none absolute z-[14] rounded-sm border border-dashed border-violet-400/85 bg-violet-500/20"
+                className="pointer-events-none absolute z-[14] rounded-md border border-dashed border-violet-400/65 bg-gradient-to-b from-violet-500/[0.22] to-transparent shadow-[inset_0_0_0_1px_rgba(167,139,250,0.12)]"
                 style={{
                   left: secondsToContentPx(phraseGhostDraft[0], pxPerSec),
                   width: Math.max(
@@ -1012,15 +1122,15 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                     secondsToContentPx(phraseGhostDraft[1], pxPerSec) -
                       secondsToContentPx(phraseGhostDraft[0], pxPerSec),
                   ),
-                  top: 6,
-                  height: Math.max(0, phraseStripPx - 8),
+                  top: TRACK_VERTICAL_GUTTER_PX + 4,
+                  height: phraseGhostH,
                 }}
               />
             ) : null}
 
             {focusGhostDraft && focusGhostDraft[1] > focusGhostDraft[0] ? (
               <div
-                className="pointer-events-none absolute z-[14] rounded-sm border border-dashed border-emerald-400/85 bg-emerald-500/20"
+                className="pointer-events-none absolute z-[15] rounded-lg border border-dashed border-emerald-400/50 bg-emerald-500/[0.1] shadow-[inset_0_0_0_1px_rgba(167,243,208,0.07)]"
                 style={{
                   left: secondsToContentPx(focusGhostDraft[0], pxPerSec),
                   width: Math.max(
@@ -1028,162 +1138,209 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
                     secondsToContentPx(focusGhostDraft[1], pxPerSec) -
                       secondsToContentPx(focusGhostDraft[0], pxPerSec),
                   ),
-                  top: phraseStripPx + 2,
-                  height: Math.max(0, focusStripPx - 4),
+                  top: focusGhostTop,
+                  height: focusGhostH,
                 }}
               />
             ) : null}
 
             {secondsToContentPx(duration, pxPerSec) > 1 ? (
               <div
-                className="pointer-events-none absolute z-[22] top-0 w-[1.5px] -translate-x-1/2 rounded-full bg-amber-400/98 shadow-[0_0_14px_rgba(251,191,36,0.45)]"
+                className="pointer-events-none absolute bottom-2 top-2 z-[45] w-0.5 -translate-x-1/2 rounded-full bg-gradient-to-b from-amber-200 via-amber-400 to-amber-500 shadow-[0_0_22px_rgba(251,191,36,0.35)]"
                 style={{
-                  height: trackBandPx,
                   left: secondsToContentPx(Math.min(duration, Math.max(currentTime, 0)), pxPerSec),
                 }}
               />
             ) : null}
 
-            <div className={cn("absolute inset-x-0 top-0 space-y-0", regionPointerShell)}>
-              <div className="relative overflow-visible" style={{ height: phraseStripPx }}>
-                {orderedLoopsPhrasePaint.map((loop) => {
-                  if (!(loop.end > loop.start)) return null;
-                  const pxL = secondsToContentPx(loop.start, pxPerSec);
-                  const pxR = secondsToContentPx(loop.end, pxPerSec);
-                  const w = Math.max(3, pxR - pxL);
-                  const phraseActive = activeLoopId === loop.id;
+            <div
+              className={cn(
+                "absolute inset-x-0 top-0 overflow-visible",
+                regionPointerShell,
+              )}
+              style={{ height: trackBandPx }}
+            >
+              {orderedLoopsPhrasePaint.map((loop, paintIx) => {
+                if (!(loop.end > loop.start)) return null;
+                const pxL = secondsToContentPx(loop.start, pxPerSec);
+                const pxR = secondsToContentPx(loop.end, pxPerSec);
+                const w = Math.max(3, pxR - pxL);
+                const phraseActive = activeLoopId === loop.id;
+                /** Horizontal padding aligning nested focus rects with lane insets (~pl-3 + ring). */
+                const innerPadX = 11;
+                /** Space reserved for Practice Section heading above the drill lane. */
+                const laneTopPx = 32;
+                const phraseStackZ = (phraseActive ? 26 : 10) + paintIx;
 
-                  return (
-                    <div
-                      key={`phrase-slot-${loop.id}`}
-                      data-neutral-timeline-region={`phrase:${loop.id}`}
-                      className={cn(
-                        "absolute top-2 overflow-visible rounded-sm border backdrop-blur-[1px]",
-                        phraseActive
-                          ? "border-violet-400/72 bg-violet-500/[0.12]"
-                          : "border-violet-500/[0.32] bg-violet-950/[0.08]",
-                      )}
-                      style={{ left: pxL, width: w, height: phraseStripPx - 8 }}
-                      onPointerDown={(e) => onPhraseStripPointerDown(e, loop)}
-                    >
-                      {phraseOverlayActive &&
-                      phraseBoundaryEditable(loop.id) ? (
-                        <>
-                          <div
-                            aria-label="Practice Section start boundary"
-                            className="absolute bottom-2 left-0 top-2 z-[2] w-[9px] max-w-[30%] cursor-ew-resize rounded-l-sm bg-white/13 hover:bg-white/24"
-                            onPointerDown={(e) => phraseEdgeResizeDown(e, loop, "start")}
-                          />
-                          <button
-                            type="button"
-                            aria-label={`Drag Practice Section: ${loop.name}`}
-                            className="absolute bottom-2 left-[9px] right-[9px] top-2 z-[1] cursor-grab rounded-sm bg-transparent px-2 text-left hover:bg-black/12 active:cursor-grabbing"
-                            onPointerDown={(e) => phraseBodyMoveDown(e, loop)}
-                          >
-                            <span className="line-clamp-1 text-[10px] font-medium text-white/92">
-                              {loop.name.trim() || "Practice Section"}
-                            </span>
-                          </button>
-                          <div
-                            aria-label="Practice Section end boundary"
-                            className="absolute bottom-2 right-0 top-2 z-[2] w-[9px] max-w-[30%] cursor-ew-resize rounded-r-sm bg-white/13 hover:bg-white/24"
-                            onPointerDown={(e) => phraseEdgeResizeDown(e, loop, "end")}
-                          />
-                        </>
-                      ) : (
-                        <div className="pointer-events-none absolute inset-2 flex items-center">
-                          <span className="line-clamp-1 text-[10px] font-medium text-white/80">
-                            {loop.name.trim() || "Practice Section"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div
-                className="relative overflow-visible"
-                style={{ height: Math.max(focusStripPx, 12) }}
-              >
-                <div className="pointer-events-none absolute bottom-5 left-0 right-0 h-px bg-stone-800/65" />
-
-                {orderedLoopsPhrasePaint.flatMap((loop) => {
-                  if (!(loop.end > loop.start)) return [];
-                  const segs = loop.segments ?? [];
-                  return segs.map((segment) => {
-                    const pxL = secondsToContentPx(segment.startTime, pxPerSec);
-                    const pxR = secondsToContentPx(segment.endTime, pxPerSec);
-                    const sw = Math.max(3, pxR - pxL);
-                    const activeSeg = segment.id === activeSegmentId;
-
-                    const focusEditable =
-                      phraseOverlayActive &&
-                      focusSegmentBoundaryEditable(segment.id);
-                    const segHitClass = cn(
-                      "absolute rounded-sm border backdrop-blur-[1px] transition-colors",
-                      phraseOverlayActive
-                        ? "pointer-events-auto"
-                        : "pointer-events-none opacity-70",
-                      activeSeg
-                        ? "border-emerald-400/80 bg-emerald-500/[0.16]"
-                        : "border-emerald-600/42 bg-emerald-950/[0.10]",
-                    );
-
-                    return (
-                      <div
-                        key={`${loop.id}:${segment.id}`}
-                        data-neutral-timeline-region={`focus:${loop.id}:${segment.id}`}
-                        className={segHitClass}
-                        style={{
-                          left: pxL,
-                          width: sw,
-                          top: 3,
-                          height: Math.max(10, focusStripPx - 10),
-                        }}
+                return (
+                  <div
+                    key={`phrase-slot-${loop.id}`}
+                    data-neutral-timeline-region={`phrase:${loop.id}`}
+                    className={cn(
+                      "absolute overflow-visible rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] backdrop-blur-[2px] transition-[border-color,box-shadow,opacity] duration-200",
+                      timelinePracticeCalmChrome && "opacity-[0.9]",
+                      phraseActive
+                        ? timelinePracticeCalmChrome
+                          ? "border border-violet-400/26 bg-[linear-gradient(to_bottom,rgba(109,93,217,0.09),rgba(26,23,43,0.28))]"
+                          : "border border-violet-400/44 bg-[linear-gradient(to_bottom,rgba(109,93,217,0.2),rgba(26,23,43,0.42))]"
+                        : "border border-white/[0.06] bg-[linear-gradient(to_bottom,rgba(44,43,71,0.16),rgba(14,13,21,0.34))]",
+                    )}
+                    style={{
+                      left: pxL,
+                      width: w,
+                      top: TRACK_VERTICAL_GUTTER_PX,
+                      height: Math.max(
+                        trackBandPx - TRACK_VERTICAL_GUTTER_PX * 2,
+                        52,
+                      ),
+                      zIndex: phraseStackZ,
+                    }}
+                    onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
+                      const node = e.target as HTMLElement | null;
+                      if (
+                        node?.closest(
+                          '[data-neutral-timeline-region^="focus:"]',
+                        )
+                      )
+                        return;
+                      onPhraseStripPointerDown(e, loop);
+                    }}
+                  >
+                    <div className="pointer-events-none absolute left-3 right-3 top-2 z-[1] flex min-w-0 items-center gap-2">
+                      <span
+                        className={cn(
+                          "truncate text-[10px] font-semibold uppercase tracking-[0.1em]",
+                          phraseActive
+                            ? "text-violet-100/93"
+                            : "text-white/74",
+                        )}
                       >
-                        {focusEditable ? (
-                          <>
+                        {loop.name.trim() || "Practice Section"}
+                      </span>
+                      <span className="h-px min-w-[14px] flex-1 bg-gradient-to-r from-white/18 to-transparent" />
+                    </div>
+
+                    {/* Invisible phrase-move plate — Focus regions sit above and capture pointers first. */}
+                    {phraseOverlayActive && phraseBoundaryEditable(loop.id) ? (
+                      <>
+                        <button
+                          type="button"
+                          aria-label={`Drag Practice Section: ${loop.name}`}
+                          className="absolute bottom-2 left-3 right-3 z-[22] rounded-md bg-transparent outline-none ring-0"
+                          style={{ top: laneTopPx }}
+                          tabIndex={-1}
+                          onPointerDown={(e) => phraseBodyMoveDown(e, loop)}
+                        />
+                        <div
+                          aria-label="Practice Section start boundary"
+                          className="absolute bottom-2 left-0 top-[26px] z-[44] w-2 cursor-ew-resize rounded-l-xl bg-gradient-to-r from-white/26 to-transparent opacity-95 hover:w-2.5 hover:from-white/43"
+                          onPointerDown={(e) =>
+                            phraseEdgeResizeDown(e, loop, "start")
+                          }
+                        />
+                        <div
+                          aria-label="Practice Section end boundary"
+                          className="absolute bottom-2 right-0 top-[26px] z-[44] w-2 cursor-ew-resize rounded-r-xl bg-gradient-to-l from-white/26 to-transparent opacity-95 hover:w-2.5 hover:from-white/43"
+                          onPointerDown={(e) =>
+                            phraseEdgeResizeDown(e, loop, "end")
+                          }
+                        />
+                      </>
+                    ) : null}
+
+                    <div
+                      className="pointer-events-none absolute inset-x-2 bottom-2 z-[24] rounded-lg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)] backdrop-blur-[2px]"
+                      style={{ top: laneTopPx }}
+                      data-neutral-focus-lane=""
+                    >
+                      <div className="pointer-events-none absolute inset-0 rounded-lg bg-black/[0.16]" />
+
+                      {[...(loop.segments ?? [])]
+                        .sort((a, b) => a.startTime - b.startTime)
+                        .map((segment) => {
+                          const absL = secondsToContentPx(segment.startTime, pxPerSec);
+                          const absR = secondsToContentPx(segment.endTime, pxPerSec);
+                          const segPxLRel = Math.max(0, absL - pxL - innerPadX);
+                          const segW = Math.max(4, absR - absL);
+                          const activeSeg = segment.id === activeSegmentId;
+                          const focusEditable =
+                            phraseOverlayActive &&
+                            focusSegmentBoundaryEditable(segment.id);
+
+                          const segClass = cn(
+                            "absolute top-2 bottom-2 rounded-lg transition-[background-color,border-color,box-shadow] duration-150",
+                            phraseOverlayActive
+                              ? timelinePracticeCalmChrome
+                                ? "pointer-events-auto cursor-default opacity-[0.88]"
+                                : "pointer-events-auto cursor-default"
+                              : "pointer-events-none opacity-[0.78]",
+                            activeSeg
+                              ? timelinePracticeCalmChrome
+                                ? "border border-emerald-300/22 bg-emerald-400/[0.07] ring-1 ring-emerald-200/15"
+                                : "border border-emerald-300/30 bg-emerald-400/[0.11] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_0_16px_rgba(167,243,208,0.065)] ring-1 ring-emerald-200/26"
+                              : "border border-white/[0.055] bg-emerald-500/[0.058] hover:border-emerald-400/24 hover:bg-emerald-400/[0.095]",
+                          );
+
+                          const zRaise = activeSeg ? 34 : 32;
+
+                          return (
                             <div
-                              aria-label={`Focus Loop ${segment.name} start`}
-                              className="absolute inset-y-3 left-0 z-[3] w-[9px] max-w-[34%] cursor-ew-resize rounded-l-md bg-emerald-300/35 hover:bg-emerald-200/50"
-                              onPointerDown={(e) =>
-                                segmentEdgeResizeDown(e, loop, segment, "start")
-                              }
-                            />
-                            <button
-                              type="button"
-                              aria-label={`Drag Focus Loop ${segment.name}`}
-                              className="absolute inset-y-3 left-[9px] right-[9px] z-[2] cursor-grab rounded-sm bg-transparent px-2 pt-px text-left text-[9px] font-medium text-emerald-50 hover:bg-black/22 active:cursor-grabbing"
-                              onPointerDown={(e) => segmentBodyMoveDown(e, loop, segment)}
+                              key={`${loop.id}:${segment.id}`}
+                              data-neutral-timeline-region={`focus:${loop.id}:${segment.id}`}
+                              className={segClass}
+                              style={{
+                                left: segPxLRel,
+                                width: segW,
+                                zIndex: zRaise,
+                              }}
                             >
-                              {segment.name.trim() || "Focus Loop"}
-                            </button>
-                            <div
-                              aria-label={`Focus Loop ${segment.name} end`}
-                              className="absolute inset-y-3 right-0 z-[3] w-[9px] max-w-[34%] cursor-ew-resize rounded-r-md bg-emerald-300/35 hover:bg-emerald-200/50"
-                              onPointerDown={(e) =>
-                                segmentEdgeResizeDown(e, loop, segment, "end")
-                              }
-                            />
-                          </>
-                        ) : phraseOverlayActive ? (
-                          <button
-                            type="button"
-                            aria-label={`Select Focus Loop ${segment.name}`}
-                            className="absolute inset-1 z-[2] cursor-default rounded-sm bg-transparent px-2 pt-px text-left text-[9px] font-medium text-emerald-50/95 hover:bg-black/14"
-                            onPointerDown={(e) =>
-                              segmentSelectPointerDown(e, loop, segment)
-                            }
-                          >
-                            {segment.name.trim() || "Focus Loop"}
-                          </button>
-                        ) : null}
-                      </div>
-                    );
-                  });
-                })}
-              </div>
+                              {focusEditable ? (
+                                <>
+                                  <div
+                                    aria-label={`Focus Loop ${segment.name} start`}
+                                    className="absolute inset-y-1.5 left-0 z-[3] w-2 max-w-[30%] cursor-ew-resize rounded-l-lg bg-emerald-200/26 opacity-90 hover:bg-emerald-100/42"
+                                    onPointerDown={(e) =>
+                                      segmentEdgeResizeDown(e, loop, segment, "start")
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    aria-label={`Drag Focus Loop ${segment.name}`}
+                                    className="absolute inset-y-1 left-2 right-2 z-[2] cursor-grab rounded-sm bg-transparent px-2 pt-px text-left text-[9px] font-medium tracking-tight text-emerald-50/95 hover:bg-black/[0.22] active:cursor-grabbing"
+                                    onPointerDown={(e) =>
+                                      segmentBodyMoveDown(e, loop, segment)
+                                    }
+                                  >
+                                    {segment.name.trim() || "Focus Loop"}
+                                  </button>
+                                  <div
+                                    aria-label={`Focus Loop ${segment.name} end`}
+                                    className="absolute inset-y-1.5 right-0 z-[3] w-2 max-w-[30%] cursor-ew-resize rounded-r-lg bg-emerald-200/26 opacity-90 hover:bg-emerald-100/42"
+                                    onPointerDown={(e) =>
+                                      segmentEdgeResizeDown(e, loop, segment, "end")
+                                    }
+                                  />
+                                </>
+                              ) : phraseOverlayActive ? (
+                                <button
+                                  type="button"
+                                  aria-label={`Select Focus Loop ${segment.name}`}
+                                  className="absolute inset-2 z-[2] cursor-default rounded-md bg-transparent px-2 text-left text-[9px] font-medium tracking-tight text-emerald-50/[0.95] hover:bg-black/[0.18]"
+                                  onPointerDown={(e) =>
+                                    segmentSelectPointerDown(e, loop, segment)
+                                  }
+                                >
+                                  {segment.name.trim() || "Focus Loop"}
+                                </button>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

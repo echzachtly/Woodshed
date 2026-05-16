@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { PracticeLoop } from "@/lib/loop-engine";
-import { shiftDragShouldCreateFocusInsideActivePhrase } from "@/lib/shift-waveform-authoring";
+import {
+  shiftDragPhraseAuthoringAllowed,
+  shiftDragShouldCreateFocusInsideActivePhrase,
+} from "@/lib/shift-waveform-authoring";
 
 function loop(start: number, end: number): PracticeLoop {
   return {
@@ -37,5 +40,58 @@ describe("shiftDragShouldCreateFocusInsideActivePhrase", () => {
     expect(shiftDragShouldCreateFocusInsideActivePhrase(L, 8, 20)).toBe(false);
     expect(shiftDragShouldCreateFocusInsideActivePhrase(L, 35, 50)).toBe(false);
     expect(shiftDragShouldCreateFocusInsideActivePhrase(L, 5, 50)).toBe(false);
+  });
+});
+
+describe("shiftDragPhraseAuthoringAllowed", () => {
+  it("returns false when authoring is disabled", () => {
+    expect(
+      shiftDragPhraseAuthoringAllowed({
+        authoringEnabled: false,
+        phraseWaveformEditUnlockedById: { a: true },
+        phraseId: "a",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows when no per-phrase unlock map is configured (legacy strip)", () => {
+    expect(
+      shiftDragPhraseAuthoringAllowed({
+        authoringEnabled: true,
+        phraseWaveformEditUnlockedById: undefined,
+        phraseId: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      shiftDragPhraseAuthoringAllowed({
+        authoringEnabled: true,
+        phraseWaveformEditUnlockedById: undefined,
+        phraseId: "anything",
+      }),
+    ).toBe(true);
+  });
+
+  it("requires a phrase id entry when unlock map exists", () => {
+    expect(
+      shiftDragPhraseAuthoringAllowed({
+        authoringEnabled: true,
+        phraseWaveformEditUnlockedById: { p: true },
+        phraseId: "p",
+      }),
+    ).toBe(true);
+    expect(
+      shiftDragPhraseAuthoringAllowed({
+        authoringEnabled: true,
+        phraseWaveformEditUnlockedById: { p: true },
+        phraseId: null,
+      }),
+    ).toBe(false);
+    expect(
+      shiftDragPhraseAuthoringAllowed({
+        authoringEnabled: true,
+        phraseWaveformEditUnlockedById: { p: true },
+        phraseId: "other",
+      }),
+    ).toBe(false);
   });
 });
