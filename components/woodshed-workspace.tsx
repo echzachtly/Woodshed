@@ -80,8 +80,8 @@ import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import { resolveTimelinePlaybackIntent } from "@/lib/interaction/timeline-playback-intent";
 import {
   buildPlaybackLoopRail,
-  getRestartSeekSeconds,
 } from "@/lib/playback-loop-rail";
+import { resolvePlaybackRestartTarget } from "@/lib/playback/restart-target";
 import {
   capturePracticeStatePersistV1,
   normalizePracticeStatePersistV1,
@@ -854,20 +854,34 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const handleMobileRestartPractice = useCallback(() => {
     const playback = getPlaybackSurface();
-    if (!playback || !activeLoopId) return;
+    if (!playback) return;
     const st = useWoodshedStore.getState();
-    const loop = st.loops.find((l) => l.id === activeLoopId);
-    if (!loop || loop.end <= loop.start) return;
-    const t = getRestartSeekSeconds({
-      loop,
-      loopPracticeScope: st.loopPracticeScope,
+    const resolved = resolvePlaybackRestartTarget({
+      duration: st.duration,
+      loops: st.loops,
+      activeLoopId: st.activeLoopId,
       activeSegmentId: st.activeSegmentId,
+      loopPlaybackEnabled: st.loopPlaybackEnabled,
+      loopPracticeScope: st.loopPracticeScope,
       lastPracticeSegmentIdByPhrase: st.lastPracticeSegmentIdByPhrase,
+      currentTime: st.currentTime,
     });
-    playback.seek(t);
-    st.setCurrentTime(t);
+    playback.seek(resolved.restartTargetSeconds);
+    st.setCurrentTime(resolved.restartTargetSeconds);
+    if (st.activeLoopId !== resolved.resolvedActiveLoopId) {
+      st.setActiveLoopId(resolved.resolvedActiveLoopId);
+    }
+    if (st.loopPlaybackEnabled !== resolved.resolvedLoopPlaybackEnabled) {
+      st.setLoopPlaybackEnabled(resolved.resolvedLoopPlaybackEnabled);
+    }
+    if (st.loopPracticeScope !== resolved.resolvedLoopPracticeScope) {
+      st.setLoopPracticeScope(resolved.resolvedLoopPracticeScope);
+    }
+    if (st.activeSegmentId !== resolved.resolvedActiveSegmentId) {
+      st.setActiveSegmentId(resolved.resolvedActiveSegmentId);
+    }
     void playback.play();
-  }, [activeLoopId, getPlaybackSurface]);
+  }, [getPlaybackSurface]);
 
   const handleMobileFocusSegmentSelect = useCallback(
     (segmentId: string) => {
@@ -3164,19 +3178,38 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                     onTogglePlay={handleTransportTogglePlay}
                     onRestartLoop={() => {
                       const playback = getPlaybackSurface();
-                      if (!playback || !activeLoopId) return;
+                      if (!playback) return;
                       const st = useWoodshedStore.getState();
-                      const loop = loops.find((l) => l.id === activeLoopId);
-                      if (!loop) return;
-                      playback.seek(
-                        getRestartSeekSeconds({
-                          loop,
-                          loopPracticeScope: st.loopPracticeScope,
-                          activeSegmentId: st.activeSegmentId,
-                          lastPracticeSegmentIdByPhrase:
-                            st.lastPracticeSegmentIdByPhrase,
-                        }),
-                      );
+                      const resolved = resolvePlaybackRestartTarget({
+                        duration: st.duration,
+                        loops: st.loops,
+                        activeLoopId: st.activeLoopId,
+                        activeSegmentId: st.activeSegmentId,
+                        loopPlaybackEnabled: st.loopPlaybackEnabled,
+                        loopPracticeScope: st.loopPracticeScope,
+                        lastPracticeSegmentIdByPhrase:
+                          st.lastPracticeSegmentIdByPhrase,
+                        currentTime: st.currentTime,
+                      });
+                      playback.seek(resolved.restartTargetSeconds);
+                      st.setCurrentTime(resolved.restartTargetSeconds);
+                      if (st.activeLoopId !== resolved.resolvedActiveLoopId) {
+                        st.setActiveLoopId(resolved.resolvedActiveLoopId);
+                      }
+                      if (
+                        st.loopPlaybackEnabled !==
+                        resolved.resolvedLoopPlaybackEnabled
+                      ) {
+                        st.setLoopPlaybackEnabled(
+                          resolved.resolvedLoopPlaybackEnabled,
+                        );
+                      }
+                      if (st.loopPracticeScope !== resolved.resolvedLoopPracticeScope) {
+                        st.setLoopPracticeScope(resolved.resolvedLoopPracticeScope);
+                      }
+                      if (st.activeSegmentId !== resolved.resolvedActiveSegmentId) {
+                        st.setActiveSegmentId(resolved.resolvedActiveSegmentId);
+                      }
                       void playback.play();
                     }}
                     onCycleLoopPlaybackMode={() =>

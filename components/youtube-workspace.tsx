@@ -55,9 +55,9 @@ import { loadYoutubeIframeApi } from "@/lib/youtube/load-youtube-iframe-api";
 import { extractYoutubeVideoId } from "@/lib/youtube/parse-video-id";
 import { YoutubeIframePlaybackSurface } from "@/lib/youtube/youtube-playback-surface";
 import {
-  getRestartSeekSeconds,
   warpPlaybackToLoopRailIfNeeded,
 } from "@/lib/playback-loop-rail";
+import { resolvePlaybackRestartTarget } from "@/lib/playback/restart-target";
 import {
   loadProject,
   saveProject,
@@ -1051,25 +1051,37 @@ export const YoutubeWorkspace = forwardRef<
   );
 
   const handleRestartLoop = useCallback(() => {
-    if (!playbackSurface || !activeLoopId) return;
+    if (!playbackSurface) return;
     const st = useWoodshedStore.getState();
-    const loop = loops.find((l) => l.id === activeLoopId);
-    if (!loop) return;
-    playbackSurface.seek(
-      getRestartSeekSeconds({
-        loop,
-        loopPracticeScope: st.loopPracticeScope,
-        activeSegmentId: st.activeSegmentId,
-        lastPracticeSegmentIdByPhrase: st.lastPracticeSegmentIdByPhrase,
-      }),
-    );
+    const resolved = resolvePlaybackRestartTarget({
+      duration: st.duration,
+      loops: st.loops,
+      activeLoopId: st.activeLoopId,
+      activeSegmentId: st.activeSegmentId,
+      loopPlaybackEnabled: st.loopPlaybackEnabled,
+      loopPracticeScope: st.loopPracticeScope,
+      lastPracticeSegmentIdByPhrase: st.lastPracticeSegmentIdByPhrase,
+      currentTime: st.currentTime,
+    });
+    playbackSurface.seek(resolved.restartTargetSeconds);
+    st.setCurrentTime(resolved.restartTargetSeconds);
+    if (st.activeLoopId !== resolved.resolvedActiveLoopId) {
+      st.setActiveLoopId(resolved.resolvedActiveLoopId);
+    }
+    if (st.loopPlaybackEnabled !== resolved.resolvedLoopPlaybackEnabled) {
+      st.setLoopPlaybackEnabled(resolved.resolvedLoopPlaybackEnabled);
+    }
+    if (st.loopPracticeScope !== resolved.resolvedLoopPracticeScope) {
+      st.setLoopPracticeScope(resolved.resolvedLoopPracticeScope);
+    }
+    if (st.activeSegmentId !== resolved.resolvedActiveSegmentId) {
+      st.setActiveSegmentId(resolved.resolvedActiveSegmentId);
+    }
     setCurrentTime(playbackSurface.getCurrentTime());
     void playbackSurface.play();
     setPlaying(true);
   }, [
     playbackSurface,
-    activeLoopId,
-    loops,
     setCurrentTime,
     setPlaying,
   ]);

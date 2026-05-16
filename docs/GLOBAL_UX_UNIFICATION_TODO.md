@@ -128,6 +128,45 @@ Manual verification checklist for this pass:
   - minimap seek
   - mobile practice flow smoke
 
+### Phase 1C restart target unification (2026-05-15)
+
+Status: in progress (extraction + cross-surface wiring landed; manual parity re-run pending).
+
+Files changed in this pass:
+
+- `lib/playback/restart-target.ts` (new pure restart resolver)
+- `lib/playback/restart-target.test.ts` (new restart contract tests)
+- `components/woodshed-workspace.tsx` (uploaded audio desktop/mobile restart paths use shared resolver)
+- `components/youtube-workspace.tsx` (YouTube desktop restart path uses shared resolver)
+- `lib/playback-loop-rail.ts` (`getRestartSeekSeconds` now delegates to shared resolver)
+
+Tests added:
+
+- `lib/playback/restart-target.test.ts`
+  - Focus Loop restart target
+  - Practice Section restart target
+  - Play Through restart target (transport-start behavior)
+  - stale Focus Loop id deterministic fallback
+  - missing active Practice Section deterministic fallback
+  - boundary clamping
+
+Manual restart checklist (Phase 1C):
+
+- [ ] Uploaded audio: Focus Loop scope restart returns to active Focus Loop start
+- [ ] Uploaded audio: Practice Section Loop scope restart returns to active Practice Section start
+- [ ] Uploaded audio: Play Through restart does not jump to stale loop/focus rail starts
+- [ ] YouTube project: repeat the same three restart checks above
+- [ ] Mobile practice flow: restart remains adjacent/primary and behavior matches resolved scope
+- [ ] Regression: click outside Practice Section -> Play Through, then restart
+- [ ] Regression: delete active Focus Loop, then restart
+- [ ] Regression: switch projects, then restart
+
+Remaining restart parity gaps / risks:
+
+- Manual parity sweep across upload + YouTube + mobile is still required for final Phase 1C sign-off.
+- `DesktopTransportBar`/mobile restart labels still describe phrase/focus semantics and do not yet explicitly communicate Play Through transport-start restart behavior.
+- Deterministic fallback for missing active Practice Section now picks earliest valid phrase; this should be validated against intended UX during manual pass.
+
 ## Phase 2 — Playback Intelligence Unification
 
 ### Goals

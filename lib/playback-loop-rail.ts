@@ -1,6 +1,7 @@
 import type { LoopRail, MediaPlaybackSurface } from "@/lib/audio-engine";
 import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import type { PracticeLoop } from "@/lib/loop-engine";
+import { resolvePlaybackRestartTarget } from "@/lib/playback/restart-target";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
 
 /** Fields read from store for loop-boundary playback and restart. */
@@ -48,20 +49,16 @@ export function getRestartSeekSeconds(args: {
   activeSegmentId: string | null;
   lastPracticeSegmentIdByPhrase: Record<string, string>;
 }): number {
-  const {
-    loop,
-    loopPracticeScope,
-    activeSegmentId,
-    lastPracticeSegmentIdByPhrase,
-  } = args;
-  if (loopPracticeScope !== "practice_region") return loop.start;
-  const seg = resolveFocusPlaybackSegment({
-    loop,
-    activeSegmentId,
-    lastPracticeSegmentIdByPhrase,
+  const resolved = resolvePlaybackRestartTarget({
+    duration: args.loop.end,
+    loops: [args.loop],
+    activeLoopId: args.loop.id,
+    activeSegmentId: args.activeSegmentId,
+    loopPlaybackEnabled: true,
+    loopPracticeScope: args.loopPracticeScope,
+    lastPracticeSegmentIdByPhrase: args.lastPracticeSegmentIdByPhrase,
   });
-  if (seg && seg.endTime > seg.startTime) return seg.startTime;
-  return loop.start;
+  return resolved.restartTargetSeconds;
 }
 
 /**
