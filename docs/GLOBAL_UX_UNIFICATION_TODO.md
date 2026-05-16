@@ -1072,48 +1072,210 @@ Manual QA checklist (Phase 5A):
 - [x] Mobile upload + YouTube embedded: transport context line reflects active practice target and updates when selecting Focus Loop chips and cycling loop mode.
 - [x] Regression: Shift+drag authoring, Practice/Edit protections, restart behavior, and save/reload remain unchanged.
 
-## Phase 6 — Persistence, Compatibility, and Stabilization
+### Phase 5B workflow confidence + discoverability pass (2026-05-16)
+
+Preflight checklist (before code edits):
+
+- [x] Re-reviewed reconciled roadmap/TODO and treated docs as authoritative.
+- [x] Reconfirmed non-goals: no playback-follow architecture changes, no uploaded-audio top-ruler enablement, no broad visual-polish reopening.
+- [x] Reconfirmed parity target: uploaded-audio and YouTube embedded workspace interaction language stays aligned.
+
+Risk callouts (must remain guarded):
+
+- [x] Transport clarity updates can accidentally imply behavior changes; copy must reflect current semantics only.
+- [x] Selection/context emphasis can over-highlight and reduce calm hierarchy; keep treatment subtle and utilitarian.
+- [x] Discoverability hints can clutter mobile practice surfaces; preserve practice-first compact hierarchy.
+- [x] Any mode/confidence messaging must preserve existing Practice/Edit semantics and not add new interaction modes.
+
+Implementation checklist (Phase 5B):
+
+- [x] Improve visible clarity of active selection/focus context (what is selected vs what is being edited).
+- [x] Strengthen active playback target clarity without changing loop/restart behavior.
+- [x] Improve project/Practice Section affordance discoverability in desktop + mobile control surfaces.
+- [x] Add lightweight contextual hints for first-time ambiguity cases ("what am I editing?", "where is the focus loop target?").
+- [x] Keep changes subtle, workflow-oriented, and architecture-safe.
+
+Implementation notes (Phase 5B):
+
+- Workflow context lines now explicitly include current mode (`Practice`/`Edit`) plus active playback target context in desktop + mobile transport surfaces.
+- Desktop inspector now shows a compact contextual state line that distinguishes selected focus/section context in Practice Mode from active edit target in Edit Mode.
+- Desktop and mobile project/Practice Section selectors now include lightweight discoverability labels to reduce first-use ambiguity about where switching lives.
+- Lightweight no-focus-target hints were added in desktop inspector and mobile practice panel to reduce "where did my focus loop go?" confusion without introducing new interaction paths.
+- Playback-follow, top-ruler toggle state, Shift+drag authoring, drag-to-scrub + edge auto-pan, and Practice/Edit semantics remain unchanged.
+
+Files changed (Phase 5B):
+
+- `components/desktop-header-bar.tsx`
+- `components/desktop-transport-bar.tsx`
+- `components/desktop-inspector-panel.tsx`
+- `components/mobile-practice-panel.tsx`
+- `components/workspace-empty-state.tsx`
+- `docs/GLOBAL_UX_UNIFICATION_TODO.md`
+
+Tests run:
+
+- `npx tsc --noEmit`
+- `npm test -- lib/regions/region-visual-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts`
+
+Manual QA checklist (Phase 5B):
+
+- [x] Desktop uploaded audio: workflow context line reads `Practice/Edit Mode` + current playback target and updates correctly when cycling loop mode.
+- [x] Desktop YouTube embedded: same workflow context semantics and phrasing remain aligned with uploaded-audio.
+- [x] Desktop inspector: context strip correctly distinguishes selection vs edit target (focus vs section) and never implies behavior changes.
+- [x] Desktop + mobile: project and Practice Section selector labels improve discoverability without adding clutter or displacing primary transport actions.
+- [x] Desktop/mobile with no focus regions: no-focus hint appears, and disappears once focus regions exist.
+- [x] Regression: Shift+drag authoring, drag-to-scrub + edge auto-pan, Practice/Edit protections, restart semantics, and playback-follow behavior remain unchanged.
+
+Phase 5B manual QA reconciliation note (2026-05-16):
+
+- Manual QA for Phase 5B passed and checklist items are now fully reconciled.
+- Uploaded-audio playback-follow architecture remains unchanged.
+- Uploaded-audio top ruler remains disabled.
+- No broad visual-polish pass and no new interaction modes were introduced in Phase 5B.
+
+## Phase 6A — Local + YouTube-local persistence stabilization
+
+Status: complete (implementation + manual QA reconciliation passed on 2026-05-16).
+
+### Scope boundaries
+
+- In scope: local Dexie + YouTube-local hydration/normalization/project-switch stability only.
+- Out of scope for 6A: cloud parity work (Phase 6B), migration/backward-compat hardening (Phase 6C) unless required for 6A correctness.
+- Must preserve existing interaction architecture and semantics.
 
 ### Goals
 
-- guarantee migration safety for existing projects and practice state
-- finalize release readiness with regression certification
+- deterministic hydration behavior in upload-local and YouTube-local paths
+- deterministic project-switch cleanup/reset without stale selection/edit/scope leakage
+- canonical normalization after every local/hydrate load path
+- deterministic fallback behavior when active phrase/focus references are stale or deleted
 
-### Affected Systems/Components
+### Affected systems/components (6A)
 
 - `lib/project-db.ts`
-- `lib/cloud-projects/client.ts`
 - `lib/practice-state-persist.ts`
 - `lib/youtube/youtube-dexie-project.ts`
-- workspace hydration/save flows in both workspaces
-- onboarding persistence modules under `lib/onboarding/`
+- `store/woodshed-store.ts`
+- upload + YouTube local hydration/switch flows in:
+  - `components/woodshed-workspace.tsx`
+  - `components/youtube-workspace.tsx`
 
-### Implementation Tasks
+### Risk notes (6A)
 
-- verify backward-compatible load/hydrate behavior after interaction refactors
-- add migration-safe normalization where new fields/rules are introduced
-- finalize rollback and feature-flag strategy for staged rollout
+- hydration ordering can reintroduce stale active focus/section references if normalization is not consistently applied
+- project-switch cleanup can accidentally clear too much state (breaking continuity) or too little state (leaking stale edit context)
+- local/upload and YouTube-local paths can diverge semantically if one path bypasses canonical normalizers
+- persistence fixes can accidentally alter runtime interaction semantics (must be prevented)
 
-### Migration Tasks
+### Implementation checklist (6A)
 
-- test old saved projects against new behavior contracts
-- ensure cloud/local parity for loop/practice state interpretation
+- [x] map all local + YouTube-local load/hydrate entry points and enforce one canonical post-load normalization contract
+- [x] ensure project-switch path always performs deterministic cleanup for selection/edit/scope state
+- [x] enforce deterministic fallback resolution for stale/invalid active loop/focus ids after hydration
+- [x] add/expand tests for local + YouTube-local roundtrip and project-switch edge cases (focus/section deletions, stale ids)
+- [x] verify no behavior drift in Practice/Edit protections, scrub/edge-auto-pan, Shift+drag authoring, transport semantics
 
-### Testing Requirements
+### Testing requirements (6A)
 
-- automated persistence roundtrip tests (local, cloud, youtube-local)
-- cross-session hydration tests
-- manual destructive-operation tests (delete loop/segment, switch project mid-session)
+- unit tests for hydration normalization and fallback determinism (upload-local + YouTube-local)
+- project-switch leakage tests (selection/edit/scope cleanup)
+- save/load roundtrip tests for local + YouTube-local only
+- focused regression run for interaction architecture invariants
 
-### Regression Risks
+### Manual QA checklist (6A)
 
-- silent data drift during normalize/hydrate paths
-- project-switch edge cases causing stale selection/scope state
+- [x] upload-local: save/reload preserves valid active phrase/focus context with deterministic fallback when stale
+- [x] YouTube-local: save/reload preserves valid active phrase/focus context with deterministic fallback when stale
+- [x] switching between upload-local and YouTube-local projects leaves no stale edit/selection/scope state
+- [x] deleting active focus/section then save/reload yields deterministic normalized playback target
+- [x] restart/loop target behavior after hydration remains consistent with current transport semantics
+- [x] no regressions in Practice/Edit protections, scrub+edge-auto-pan, Shift+drag authoring, upload/YouTube parity
 
-### Completion Criteria
+### Completion criteria (6A)
 
-- persistence roundtrips are stable across all supported project types
-- regression matrix signed off for desktop/mobile and both playback surfaces
+- local + YouTube-local persistence/hydration/project-switch behavior is deterministic and test-backed
+- no stale selection/edit/scope leakage across local project switches
+- interaction architecture semantics remain unchanged
+
+Implementation notes (6A):
+
+- Added a shared hydration activation boundary (`activateHydratedProjectState`) so upload-local and YouTube-local ingest paths converge through one canonical active-state resolution model.
+- Canonical activation boundary now enforces:
+  - project/media context cleanup via existing store `setProjectMeta` switch normalization
+  - deterministic loop activation fallback (`session-valid -> persisted-valid -> first-valid -> null`)
+  - single normalized practice-state application path via `normalizePracticeStatePersistV1` + `applyHydratedPracticePreferences`
+- Same-project/media reloads preserve valid in-session selection/scope context when persisted practice state is absent; cross-project/media switches still clear stale edit/unlock state deterministically.
+- Cross-project selection/edit/scope leakage protections were added and validated through canonical context-switch normalization.
+- Browser refresh now restores the last active local uploaded-audio or YouTube-local workspace when the saved pointer resolves to a valid local project.
+- Invalid/missing/corrupt restore targets now fail gracefully to Open/Create (pointer cleanup + safe workspace reset), without bypassing canonical activation on successful restores.
+- No schema migrations, no versioning system changes, and no broad hydration refactor were introduced.
+- No cloud restore work was started in 6A.
+- No changes were made to interaction architecture/Practice-Edit semantics (Practice/Edit protections, scrub+edge-auto-pan, Shift+drag authoring, transport semantics).
+- Uploaded-audio top ruler remains intentionally disabled.
+
+Files changed (6A):
+
+- `lib/persistence/activate-hydrated-project-state.ts` (new)
+- `components/woodshed-workspace.tsx`
+- `lib/youtube/youtube-dexie-project.ts`
+- `lib/persistence/activate-hydrated-project-state.test.ts` (new)
+- `lib/youtube/youtube-dexie-project.test.ts`
+- `lib/practice-state-persist.test.ts`
+- `lib/persistence/last-active-workspace.ts` (new)
+- `lib/persistence/last-active-workspace.test.ts` (new)
+
+Tests run (6A):
+
+- `npx tsc --noEmit`
+- `npm test -- lib/practice-state-persist.test.ts lib/youtube/youtube-dexie-project.test.ts lib/playback/playback-scope-normalization.test.ts lib/persistence/activate-hydrated-project-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts`
+- `npm test -- lib/persistence/last-active-workspace.test.ts lib/persistence/activate-hydrated-project-state.test.ts lib/youtube/youtube-dexie-project.test.ts`
+
+Phase 6A manual QA reconciliation note (2026-05-16):
+
+- All Phase 6A implementation and manual QA checklist items are now complete.
+- Local upload + YouTube-local hydration now share a canonical activation/finalization boundary (`activateHydratedProjectState`).
+- Deterministic stale-reference fallback behavior is enforced for phrase/focus restoration.
+- Cross-project selection/edit/scope leakage protections are in place and validated.
+- Browser refresh/session startup now restores last active local/YouTube-local workspace when valid.
+- Invalid or missing restore targets fail gracefully to Open/Create without crashing or leaving stale session state.
+- No cloud restore work was started (explicitly deferred to Phase 6B).
+- No migration/versioning system was introduced (explicitly deferred to Phase 6C).
+- Uploaded-audio top ruler remains disabled.
+- Interaction architecture and Practice/Edit semantics remain unchanged.
+
+Known residual risks deferred beyond 6A:
+
+- **Phase 6B:** cloud save/load restore parity may still diverge from local/YouTube-local semantics (active selection scope, restart targeting, refresh reopen behavior) until cloud-specific restore wiring is implemented and validated.
+- **Phase 6C:** backward compatibility for older persisted payload variants still needs dedicated migration-hardening decisions once 6B parity constraints are known.
+- **Phase 6C:** final lock/unlock alias naming cleanup remains deferred to the dedicated migration pass.
+
+Future architectural recommendations surfaced during 6A:
+
+- Keep `activateHydratedProjectState` as the single authoritative activation/finalization ingress for every future load path (local, cloud, imports, demos).
+- Keep the “last-active pointer” intentionally minimal (identity only) and avoid persisting transient UI state that can drift from canonical hydration.
+- Reuse the same restore orchestration contract (`attempt restore -> canonical hydrate -> graceful fallback`) for cloud in 6B rather than introducing parallel behavior.
+
+## Phase 6B — Cloud persistence parity (deferred from 6A)
+
+### Scope
+
+- cloud save/load parity with already-stabilized local + YouTube-local semantics
+- cloud/local interpretation parity for practice scope, active loop/focus, and restart targeting
+
+### Notes
+
+- do not begin until 6A is complete and stable
+
+## Phase 6C — Backward compatibility and migration hardening (deferred from 6A)
+
+### Scope
+
+- old saved-project compatibility verification and migration hardening
+- persisted-shape compatibility guards where required
+
+### Notes
+
+- do not begin until 6A/6B stability confirms whether migration changes are necessary
 
 ## Global Regression Matrix (Required Across Phases)
 

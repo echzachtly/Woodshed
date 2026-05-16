@@ -1442,6 +1442,11 @@ export const YoutubeWorkspace = forwardRef<
                   regionContextActive={regionContextActive}
                   activeLoopId={activeLoopId}
                   editableLoopId={editableLoopId}
+                  activePhraseName={activeLoop?.name ?? null}
+                  activeFocusName={
+                    activeLoop?.segments?.find((seg) => seg.id === activeSegmentId)
+                      ?.name ?? null
+                  }
                   onToggleEditContext={handleTransportEditContext}
                   onDeleteContext={handleTransportDeleteContext}
                   tempoPercent={Math.round((activeLoop?.tempo ?? 1) * 100)}

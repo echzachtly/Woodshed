@@ -72,6 +72,9 @@ export const WorkspaceEmptyState = memo(function WorkspaceEmptyState(
           <p className="mx-auto max-w-[14rem] text-[11px] leading-relaxed text-stone-500/90">
             Import audio, open saved work, or try the demo.
           </p>
+          <p className="mx-auto max-w-[14.5rem] text-[10px] leading-relaxed text-stone-600/85">
+            After loading, use Project and Practice Section selectors to switch quickly.
+          </p>
         </div>
 
         <div className="flex w-full flex-col gap-2.5">

@@ -53,7 +53,7 @@ describe("normalizePracticeStatePersistV1", () => {
     expect(out!.activeSegmentId).toBeNull();
   });
 
-  it("drops stale segment ids for the active phrase", () => {
+  it("falls back from stale active segment to last valid focus segment", () => {
     const out = normalizePracticeStatePersistV1(
       {
         v: 1,
@@ -65,8 +65,8 @@ describe("normalizePracticeStatePersistV1", () => {
       [phrase],
       "p1",
     );
-    expect(out!.activeSegmentId).toBeNull();
-    expect(out!.loopPracticeScope).toBe("phrase");
+    expect(out!.activeSegmentId).toBe("s1");
+    expect(out!.loopPracticeScope).toBe("practice_region");
   });
 
   it("keeps valid focus selection", () => {

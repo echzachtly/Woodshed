@@ -500,6 +500,18 @@ Make playback feel alive.
 ## Important Constraint
 Avoid flashy/gaming-style animation.
 
+### Checkpoint (2026-05-16, Phase 5B)
+
+- Confidence/discoverability emphasis pass completed with subtle workflow-oriented cues (no architecture rewrites, no new interaction modes).
+- Mode + playback-target context clarity is now surfaced more explicitly in shared transport surfaces.
+- Selection vs edit-target ambiguity was reduced through lightweight contextual messaging in inspector/mobile practice surfaces.
+- Project/Practice Section switching affordance discoverability was improved with low-noise labeling in control surfaces.
+- Playback-follow architecture, Shift+drag authoring, scrub + edge auto-pan, Practice/Edit semantics, and top-ruler disabled state remain unchanged.
+
+Reconciliation note (2026-05-16, post-Phase-5B-manual-QA):
+
+- Phase 5B manual QA passed and status is reconciled in `docs/GLOBAL_UX_UNIFICATION_TODO.md`.
+
 ---
 
 # PHASE 6 — Stability & External Testing Preparation
@@ -541,6 +553,51 @@ Identify:
 - stable beta-ready build
 - documented known issues
 - external testing checklist
+
+### Phase 6 split checkpoint (2026-05-16)
+
+- **Phase 6A (complete):** local + YouTube-local persistence/hydration/normalization/project-switch stabilization (implementation + manual QA fully passed).
+- **Phase 6B (deferred):** cloud persistence parity against 6A-stabilized behavior.
+- **Phase 6C (deferred):** backward-compatibility and migration hardening, only after 6A/6B outcomes.
+
+Guardrails carried into 6A:
+
+- preserve Practice/Edit architecture and protections
+- preserve scrub + edge-auto-pan and Shift+drag authoring behavior
+- preserve upload/YouTube interaction parity
+- keep uploaded-audio top ruler disabled
+- no broad visual redesign work
+- no new interaction modes
+
+### Checkpoint (2026-05-16, Phase 6A implementation)
+
+- Upload-local and YouTube-local hydration now converge through a shared canonical activation boundary before active state becomes authoritative.
+- Deterministic active-state fallback is enforced for stale/invalid phrase/focus references during hydration.
+- Same-project/media reloads preserve valid in-session context when persisted practice prefs are missing; cross-project/media paths still enforce deterministic cleanup.
+- Browser refresh/session startup now restores last active local uploaded-audio or YouTube-local workspace when valid.
+- Invalid or missing restore targets now fail gracefully to Open/Create without stale session leakage.
+- Cross-project selection/edit/scope leakage protections were added and verified.
+- No cloud stabilization work was started (Phase 6B deferred).
+- No migration/versioning system was introduced in 6A; migration/backward-compat hardening remains deferred to 6C.
+- Uploaded-audio top ruler remains intentionally disabled.
+- Interaction architecture and Practice/Edit semantics remain unchanged.
+
+### Reconciliation note (2026-05-16, Phase 6A manual QA complete)
+
+- All Phase 6A implementation and manual QA checklist items are complete.
+- Canonical activation/finalization and deterministic stale-reference fallback are now the enforced baseline for local + YouTube-local hydration.
+- 6A stayed within scope boundaries: no cloud restore work, no schema migration/versioning rollout, no interaction-model changes.
+
+Residual risks intentionally deferred:
+
+- **To 6B:** cloud restore parity with local/YouTube-local behavior (including refresh reopen semantics and canonical active-state reconciliation).
+- **To 6C:** legacy persisted-shape compatibility hardening and any required migration strategy after 6B parity constraints are known.
+
+Architectural recommendations from 6A:
+
+- Keep every load/restore path routed through the same canonical activation/finalization boundary instead of path-specific state application.
+- Keep restoration identity minimal (project/source identity only) and let canonical hydration reconstruct active practice context.
+- Mirror local restore orchestration for cloud in 6B (`resolve identity -> load -> canonical hydrate -> graceful fallback`) to prevent semantic drift.
 
 ---
 

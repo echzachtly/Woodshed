@@ -12,6 +12,7 @@ import { memo } from "react";
 import { TempoPillPicker } from "@/components/tempo-pill-picker";
 import { Button } from "@/components/ui/button";
 import {
+  describeLoopWorkflowContext,
   getLoopModeDescription,
   getLoopModeDisplay,
   getNextLoopModeDisplay,
@@ -33,6 +34,8 @@ export type DesktopTransportBarProps = {
   regionContextActive: boolean;
   activeLoopId: string | null;
   editableLoopId: string | null;
+  activePhraseName?: string | null;
+  activeFocusName?: string | null;
   onToggleEditContext: () => void;
   onDeleteContext: () => void;
   tempoPercent: number;
@@ -65,6 +68,8 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
     regionContextActive,
     activeLoopId,
     editableLoopId,
+    activePhraseName,
+    activeFocusName,
     onToggleEditContext,
     onDeleteContext,
     tempoPercent,
@@ -101,6 +106,13 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
 
   const loopTooltip = `${getLoopModeDescription(loopCurrent)} — Next: ${getLoopModeDescription(loopNext)}. Click to cycle.`;
   const loopAriaLabel = `Practice loop. ${getLoopModeDescription(loopCurrent)}. Next: ${getLoopModeDescription(loopNext)}.`;
+  const workflowContext = describeLoopWorkflowContext({
+    loopPlaybackEnabled,
+    loopPracticeScope,
+    phraseHasFocusRegions,
+    activePhraseName,
+    activeFocusName,
+  });
 
   const modeEditingEnabled = interactionModeChip?.editingEnabled ?? editingPhrase;
   const modeLabel = modeEditingEnabled ? "Edit" : "Practice";
@@ -109,6 +121,7 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
     ? "Edit Mode — region editing enabled. Click to switch to Practice Mode."
     : "Practice Mode — protected from accidental edits. Click to switch to Edit Mode.";
   const modeAriaLabel = `${modeLabel} Mode. Click to switch to ${modeNextLabel} Mode.`;
+  const modeContextLine = `${modeLabel} Mode · ${workflowContext}`;
 
   const deleteTitle = regionContextActive
     ? "Delete focus region"
@@ -179,31 +192,46 @@ export const DesktopTransportBar = memo(function DesktopTransportBar(
       )}
       aria-label="Transport"
     >
-      <div className="flex min-w-0 items-center gap-2 justify-self-start">
+      <div className="flex min-w-0 flex-col items-start gap-0.5 justify-self-start">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              "font-mono text-[11px] tabular-nums tracking-tight",
+              timelineIdle
+                ? "text-stone-600"
+                : duration
+                  ? "text-stone-400"
+                  : "text-stone-600",
+            )}
+            aria-label={
+              timelineIdle
+                ? "Position — idle until audio is loaded"
+                : "Current time over total duration"
+            }
+          >
+            {timelineIdle
+              ? "— · —"
+              : `${formatTime(currentTime)} / ${formatTime(duration)}`}
+          </span>
+          {!timelineIdle && loopPlaybackEnabled ? (
+            <span className="hidden max-w-[8rem] truncate text-[10px] font-medium text-violet-300/90 sm:inline">
+              {loopCurrent}
+            </span>
+          ) : null}
+        </div>
         <span
           className={cn(
-            "font-mono text-[11px] tabular-nums tracking-tight",
-            timelineIdle
-              ? "text-stone-600"
-              : duration
-                ? "text-stone-400"
-                : "text-stone-600",
+            "max-w-[16rem] truncate text-[10px] font-medium tracking-tight",
+            timelineIdle ? "text-stone-700" : "text-stone-500",
           )}
           aria-label={
             timelineIdle
-              ? "Position — idle until audio is loaded"
-              : "Current time over total duration"
+              ? "Workflow context unavailable until audio is loaded"
+              : `Workflow context: ${modeContextLine}`
           }
         >
-          {timelineIdle
-            ? "— · —"
-            : `${formatTime(currentTime)} / ${formatTime(duration)}`}
+          {timelineIdle ? "Load audio to begin practice flow" : modeContextLine}
         </span>
-        {!timelineIdle && loopPlaybackEnabled ? (
-          <span className="hidden max-w-[8rem] truncate text-[10px] font-medium text-violet-300/90 sm:inline">
-            {loopCurrent}
-          </span>
-        ) : null}
       </div>
 
       <div className="justify-self-center">{playbackCluster}</div>

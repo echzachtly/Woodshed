@@ -89,8 +89,15 @@ import {
 import { resolvePlaybackRestartTarget } from "@/lib/playback/restart-target";
 import {
   capturePracticeStatePersistV1,
-  normalizePracticeStatePersistV1,
 } from "@/lib/practice-state-persist";
+import { activateHydratedProjectState } from "@/lib/persistence/activate-hydrated-project-state";
+import {
+  clearLastActiveWorkspacePointer,
+  inferLocalWorkspaceKind,
+  readLastActiveWorkspacePointer,
+  writeLastActiveWorkspacePointer,
+  type LastActiveWorkspacePointer,
+} from "@/lib/persistence/last-active-workspace";
 import {
   DEFAULT_UPLOAD_MEDIA_SOURCE,
   normalizeMediaSourceFromStoredProject,
@@ -166,6 +173,9 @@ const DESKTOP_BOTTOM_STACK_PX_KEY = "woodshed-desktop-bottom-stack-px";
 const DESKTOP_BOTTOM_STACK_MIN = 112;
 const DESKTOP_WAVEFORM_MIN = 80;
 const DESKTOP_BOTTOM_STACK_MAX_FRAC = 0.58;
+/** Hysteresis for inspector auto-compact posture when bottom stack is reduced. */
+const DESKTOP_PRACTICE_ZEN_BOTTOM_ENTER_PX = 156;
+const DESKTOP_PRACTICE_ZEN_BOTTOM_EXIT_PX = 212;
 
 const MOBILE_AUDIO_INPUT_ACCEPT =
   "audio/*,.mp3,.m4a,.aac,.wav,.flac,.aiff,.aif";
@@ -474,6 +484,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   );
   const [decodedPeaks, setDecodedPeaks] = useState<Float32Array | null>(null);
   const [desktopBottomStackPx, setDesktopBottomStackPx] = useState(200);
+  const [desktopPracticeFocusZen, setDesktopPracticeFocusZen] = useState(false);
   const [viewport, setViewport] = useState<VisibleWindow>({
     startRatio: 0,
     durationRatio: 1,
@@ -508,8 +519,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const [timelineDiagnosticsOverlay, setTimelineDiagnosticsOverlay] =
     useState<TimelineDiagnosticsOverlay | null>(null);
   const hydrateProjectFnRef = useRef<
-    (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => Promise<void>
-  >(() => Promise.resolve());
+    (meta: StoredProjectMeta, options?: { audioBlob?: Blob }) => Promise<boolean>
+  >(() => Promise.resolve(false));
+  const startupRestoreAttemptedRef = useRef(false);
+  const startupRestoreInFlightRef = useRef(false);
 
   const {
     projectName,
@@ -647,6 +660,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     setDemoOrientationSeen(true);
   }, []);
 
+  const dismissDesktopPracticeFocusZen = useCallback(() => {
+    setDesktopPracticeFocusZen(false);
+  }, []);
+
   const desktopBottomStackPxRef = useRef(desktopBottomStackPx);
   desktopBottomStackPxRef.current = desktopBottomStackPx;
 
@@ -708,6 +725,19 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       ro.disconnect();
     };
   }, [isMobilePractice, desktopBottomStackPx]);
+
+  useEffect(() => {
+    if (isMobilePractice) {
+      setDesktopPracticeFocusZen(false);
+      return;
+    }
+    const px = desktopBottomStackPx;
+    setDesktopPracticeFocusZen((prev) => {
+      if (px <= DESKTOP_PRACTICE_ZEN_BOTTOM_ENTER_PX) return true;
+      if (px >= DESKTOP_PRACTICE_ZEN_BOTTOM_EXIT_PX) return false;
+      return prev;
+    });
+  }, [desktopBottomStackPx, isMobilePractice]);
 
   useEffect(() => {
     setMobileEditModeActive(false);
@@ -2076,45 +2106,31 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         const pending = pendingHydration.current;
         const demo = pendingDemoHydrationRef.current;
         if (pending) {
-          state.setProjectMeta(
-            pending.id,
-            pending.name,
-            normalizeMediaSourceFromStoredProject(pending),
-          );
-          state.upsertLoops(pending.loops);
-          if (
-            pending.activeLoopId &&
-            pending.loops.some((l) => l.id === pending.activeLoopId)
-          ) {
-            state.selectLoop(pending.activeLoopId);
-          }
-          const stAfter = useWoodshedStore.getState();
-          const rawPractice = pending.practiceStateV1;
-          if (rawPractice != null) {
-            const normalized = normalizePracticeStatePersistV1(
-              rawPractice,
-              stAfter.loops,
-              stAfter.activeLoopId,
-            );
-            if (normalized) {
-              useWoodshedStore
-                .getState()
-                .applyHydratedPracticePreferences(normalized);
-            }
-          }
+          activateHydratedProjectState({
+            projectId: pending.id,
+            projectName: pending.name,
+            mediaSource: normalizeMediaSourceFromStoredProject(pending),
+            loops: pending.loops,
+            activeLoopId: pending.activeLoopId,
+            practiceStateV1: pending.practiceStateV1,
+            durationSeconds: dur,
+            minPxPerSecPersist: pending.minPxPerSecPersist,
+            preserveInSessionContextOnSameProjectReload: true,
+          });
           pendingHydration.current = null;
         } else if (demo) {
           const loops = demoRowsToPracticeLoops(demo.loopRows, dur);
-          state.setProjectMeta(demo.projectId, demo.title, {
-            ...DEFAULT_UPLOAD_MEDIA_SOURCE,
+          activateHydratedProjectState({
+            projectId: demo.projectId,
+            projectName: demo.title,
+            mediaSource: {
+              ...DEFAULT_UPLOAD_MEDIA_SOURCE,
+            },
+            loops,
+            activeLoopId: demo.activeLoopId,
+            durationSeconds: dur,
+            preserveInSessionContextOnSameProjectReload: false,
           });
-          state.upsertLoops(loops);
-          const active =
-            demo.activeLoopId &&
-            loops.some((l) => l.id === demo.activeLoopId)
-              ? demo.activeLoopId
-              : (loops[0]?.id ?? null);
-          if (active) state.selectLoop(active);
           pendingDemoHydrationRef.current = null;
         } else if (state.loops.length === 0) {
           state.bootstrapFromDuration(dur);
@@ -2907,7 +2923,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         devWarn(
           "hydrateProject called with YouTube media — use main-app YouTube loader.",
         );
-        return;
+        return false;
       }
       const ws = wavesurferRef.current;
       if (!ws) {
@@ -2927,7 +2943,7 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         setAudioTimelineLoading(true);
         loopsSignature.current = "";
         audioBlobRef.current = null;
-        return;
+        return true;
       }
       deferredDemoLoadRef.current = false;
       deferredUploadHydrationRef.current = undefined;
@@ -2937,13 +2953,21 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       }
       setMobileEditModeActive(false);
       pendingDemoHydrationRef.current = null;
+      const blobRecordId =
+        typeof meta.blobId === "string" && meta.blobId.length > 0
+          ? meta.blobId
+          : normalized.kind === "upload" &&
+              typeof normalized.blobId === "string" &&
+              normalized.blobId.length > 0
+            ? normalized.blobId
+            : null;
       const blob =
         options?.audioBlob ??
-        (meta.blobId ? await loadBlobRecord(meta.blobId) : undefined);
+        (blobRecordId ? await loadBlobRecord(blobRecordId) : undefined);
       if (!blob) {
         pendingHydration.current = null;
         devWarn("Missing archived audio blob");
-        return;
+        return false;
       }
       setAudioTimelineLoading(true);
       pendingHydration.current = meta;
@@ -2954,10 +2978,12 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         await primeWaveformCaches(blob);
         await ws.load(URL.createObjectURL(blob));
         await listProjects().then(setProjectsList);
+        return true;
       } catch {
         setAudioTimelineLoading(false);
         pendingHydration.current = null;
         devError("Failed to load project audio");
+        return false;
       }
     },
     [primeWaveformCaches],
@@ -3347,6 +3373,13 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     if (playbackChromeIdle) return "—";
     return activeLoop?.name ?? "No section";
   }, [playbackChromeIdle, activeLoop?.name]);
+  const activeFocusName = useMemo(() => {
+    if (!activeLoop?.segments?.length || !mobileFocusChipSelectedId) return null;
+    return (
+      activeLoop.segments.find((seg) => seg.id === mobileFocusChipSelectedId)?.name ??
+      null
+    );
+  }, [activeLoop?.segments, mobileFocusChipSelectedId]);
 
   const enterMobileEditMode = useCallback(() => {
     if (!isMobilePractice || playbackChromeIdle || isDemoProject) return;
@@ -3523,6 +3556,59 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     handleTransportTempo(100);
   }, [handleTransportTempo]);
 
+  const restoreDexieProjectById = useCallback(
+    async (
+      id: string,
+      options?: {
+        silent?: boolean;
+        expectedKind?: LastActiveWorkspacePointer["kind"];
+      },
+    ): Promise<boolean> => {
+      const project = await loadDexieProject(id);
+      if (!project) return false;
+      const normalized = normalizeMediaSourceFromStoredProject(project);
+      const resolvedKind = inferLocalWorkspaceKind(normalized);
+      if (options?.expectedKind && options.expectedKind !== resolvedKind) {
+        return false;
+      }
+      if (normalized.kind === "youtube") {
+        if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) {
+          if (!options?.silent) {
+            setSaveStatusMessage(
+              "This session uses YouTube. Enable NEXT_PUBLIC_WOODSHED_YOUTUBE_WORKSPACE in your environment to open it.",
+            );
+            setSaveStatusTone("error");
+            scheduleSaveStatusClear(12_000);
+          }
+          return false;
+        }
+        const v = validateYoutubeDexieProjectMeta(project);
+        if (!v.ok) {
+          if (!options?.silent) {
+            setSaveStatusMessage(`Could not open YouTube project: ${v.reason}`);
+            setSaveStatusTone("error");
+            scheduleSaveStatusClear(12_000);
+          }
+          return false;
+        }
+        setMobileEditModeActive(false);
+        deferredUploadHydrationRef.current = undefined;
+        deferredDemoLoadRef.current = false;
+        if (pendingWaveSurferObjectUrlRef.current) {
+          URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
+          pendingWaveSurferObjectUrlRef.current = null;
+        }
+        pendingDemoHydrationRef.current = null;
+        pendingHydration.current = null;
+        hydrateYoutubeDexieIntoStore(v.meta);
+        await listProjects().then(setProjectsList);
+        return true;
+      }
+      return hydrateProject(project);
+    },
+    [hydrateProject, scheduleSaveStatusClear],
+  );
+
   const handleRestoreProject = useCallback(
     async (id: string) => {
       if (id === DEMO_PROJECT_ID) {
@@ -3558,47 +3644,76 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
         }
         return;
       }
-      const project = await loadDexieProject(id);
-      if (!project) return;
-      if (normalizeMediaSourceFromStoredProject(project).kind === "youtube") {
-        if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED) {
-          setSaveStatusMessage(
-            "This session uses YouTube. Enable NEXT_PUBLIC_WOODSHED_YOUTUBE_WORKSPACE in your environment to open it.",
-          );
-          setSaveStatusTone("error");
-          scheduleSaveStatusClear(12_000);
-          return;
-        }
-        const v = validateYoutubeDexieProjectMeta(project);
-        if (!v.ok) {
-          setSaveStatusMessage(`Could not open YouTube project: ${v.reason}`);
-          setSaveStatusTone("error");
-          scheduleSaveStatusClear(12_000);
-          return;
-        }
-        setMobileEditModeActive(false);
-        deferredUploadHydrationRef.current = undefined;
-        deferredDemoLoadRef.current = false;
-        if (pendingWaveSurferObjectUrlRef.current) {
-          URL.revokeObjectURL(pendingWaveSurferObjectUrlRef.current);
-          pendingWaveSurferObjectUrlRef.current = null;
-        }
-        pendingDemoHydrationRef.current = null;
-        pendingHydration.current = null;
-        hydrateYoutubeDexieIntoStore(v.meta);
-        await listProjects().then(setProjectsList);
-        return;
-      }
-      await hydrateProject(project);
+      await restoreDexieProjectById(id);
     },
     [
-      hydrateProject,
       loadBuiltInDemoProject,
       refreshCloudProjects,
+      restoreDexieProjectById,
       scheduleSaveStatusClear,
       supabase,
     ],
   );
+
+  useEffect(() => {
+    if (!projectId || projectId === DEMO_PROJECT_ID) return;
+    const localDexieProject = projects.find((p) => p.id === projectId);
+    if (!localDexieProject) {
+      // Avoid recording unsaved/transient ids (or cloud ids not backed by Dexie).
+      return;
+    }
+    const localKind =
+      normalizeMediaSourceFromStoredProject(localDexieProject).kind === "youtube"
+        ? "youtube-local"
+        : "upload-local";
+    writeLastActiveWorkspacePointer({
+      v: 1,
+      projectId,
+      kind: localKind,
+    });
+  }, [projectId, projects]);
+
+  useEffect(() => {
+    if (startupRestoreAttemptedRef.current) return;
+    if (startupRestoreInFlightRef.current) return;
+    if (!dexieProjectsListed) return;
+    const activeWorkspaceAlreadyHydrated =
+      Boolean(projectId) &&
+      (duration > 0 ||
+        loops.length > 0 ||
+        audioTimelineLoading ||
+        mediaSourceKind === "youtube");
+    if (activeWorkspaceAlreadyHydrated) {
+      startupRestoreAttemptedRef.current = true;
+      return;
+    }
+    const pointer = readLastActiveWorkspacePointer();
+    startupRestoreAttemptedRef.current = true;
+    if (!pointer) return;
+
+    startupRestoreInFlightRef.current = true;
+    void restoreDexieProjectById(pointer.projectId, {
+      silent: true,
+      expectedKind: pointer.kind,
+    })
+      .then((ok) => {
+        if (!ok) {
+          clearLastActiveWorkspacePointer();
+          useWoodshedStore.getState().resetWorkspace();
+        }
+      })
+      .finally(() => {
+        startupRestoreInFlightRef.current = false;
+      });
+  }, [
+    audioTimelineLoading,
+    dexieProjectsListed,
+    duration,
+    loops.length,
+    mediaSourceKind,
+    projectId,
+    restoreDexieProjectById,
+  ]);
 
   const showCloudSessions = Boolean(
     isSupabaseConfigured() && supabase && cloudSessionUserId,
@@ -4184,6 +4299,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                     regionContextActive={regionContextActive}
                     activeLoopId={activeLoopId}
                     editableLoopId={editableLoopId}
+                    activePhraseName={activeLoop?.name ?? null}
+                    activeFocusName={activeFocusName}
                     interactionModeChip={{
                       editingEnabled: desktopStructuralEditActive,
                     }}
@@ -4233,7 +4350,10 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
                     onTempoSlider={handleTransportTempo}
                     formatTime={(t) => formatTime(t)}
                   />
-                  <DesktopInspectorPanel />
+                  <DesktopInspectorPanel
+                    practiceFocusLayout={desktopPracticeFocusZen}
+                    onDismissPracticeFocusLayout={dismissDesktopPracticeFocusZen}
+                  />
                 </div>
               </div>
             </>

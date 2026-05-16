@@ -18,12 +18,11 @@ import { nanoid } from "@/lib/id";
 import type { PracticeLoop } from "@/lib/loop-engine";
 import {
   capturePracticeStatePersistV1,
-  normalizePracticeStatePersistV1,
 } from "@/lib/practice-state-persist";
 import type { WoodshedMediaSource } from "@/lib/woodshed-media-source";
 import { normalizeMediaSourceFromStoredProject } from "@/lib/woodshed-media-source";
+import { activateHydratedProjectState } from "@/lib/persistence/activate-hydrated-project-state";
 import type { LoopPracticeScope } from "@/store/woodshed-store";
-import { useWoodshedStore } from "@/store/woodshed-store";
 
 export type ValidatedYoutubeDexieProjectMeta = StoredProjectMeta & {
   mediaSource: Extract<WoodshedMediaSource, { kind: "youtube" }>;
@@ -147,34 +146,15 @@ export async function listValidatedYoutubeDexieProjects(): Promise<
 export function hydrateYoutubeDexieIntoStore(
   meta: ValidatedYoutubeDexieProjectMeta,
 ): void {
-  const st = useWoodshedStore.getState();
-  st.setProjectMeta(meta.id, meta.name, meta.mediaSource);
-  st.setDuration(inferYoutubeTimelineDurationSec(meta));
-  const px = meta.minPxPerSecPersist;
-  if (typeof px === "number" && Number.isFinite(px) && px > 0) {
-    st.setMinPxPerSec(px);
-  }
-  st.setCurrentTime(0);
-  st.setPlaying(false);
-  st.upsertLoops(meta.loops);
-  const active =
-    meta.activeLoopId && meta.loops.some((l) => l.id === meta.activeLoopId)
-      ? meta.activeLoopId
-      : meta.loops[0]?.id ?? null;
-  if (active) {
-    st.selectLoop(active);
-  } else {
-    st.selectLoop(null);
-  }
-  const rawPractice = meta.practiceStateV1;
-  if (rawPractice != null) {
-    const normalized = normalizePracticeStatePersistV1(
-      rawPractice,
-      meta.loops,
-      active,
-    );
-    if (normalized) {
-      st.applyHydratedPracticePreferences(normalized);
-    }
-  }
+  activateHydratedProjectState({
+    projectId: meta.id,
+    projectName: meta.name,
+    mediaSource: meta.mediaSource,
+    loops: meta.loops,
+    activeLoopId: meta.activeLoopId,
+    practiceStateV1: meta.practiceStateV1,
+    durationSeconds: inferYoutubeTimelineDurationSec(meta),
+    minPxPerSecPersist: meta.minPxPerSecPersist,
+    preserveInSessionContextOnSameProjectReload: true,
+  });
 }

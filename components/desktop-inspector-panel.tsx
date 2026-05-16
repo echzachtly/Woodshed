@@ -707,13 +707,31 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel(
       </div>
     ) : null;
 
+  const structuralPracticeMode = isStructuralPracticeMode();
+  const inspectorContextLine =
+    duration && activeLoop
+      ? structuralPracticeMode
+        ? activeSegment
+          ? `Practice Mode · Focus selected: ${activeSegment.name}`
+          : `Practice Mode · Section selected: ${activeLoop.name}`
+        : activeSegment
+          ? `Edit Mode · Editing Focus Loop: ${activeSegment.name}`
+          : `Edit Mode · Editing Practice Section: ${activeLoop.name}`
+      : null;
+
   const activePhraseBody =
     duration && activeLoop ? (
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-2.5 pt-1.5">
-        {activeSegment && !phraseRenameOpen ? (
-          <p className="-mt-1 shrink-0 text-[10px] text-stone-600">
-            Editing focus:{" "}
-            <span className="text-stone-400">{activeSegment.name}</span>
+        {inspectorContextLine && !phraseRenameOpen ? (
+          <p
+            className={cn(
+              "-mt-1 shrink-0 rounded-md border px-2 py-1 text-[10px]",
+              structuralPracticeMode
+                ? "border-emerald-500/18 bg-emerald-950/16 text-emerald-100/78"
+                : "border-amber-500/22 bg-amber-950/14 text-amber-100/84",
+            )}
+          >
+            {inspectorContextLine}
           </p>
         ) : null}
 
@@ -729,6 +747,11 @@ export const DesktopInspectorPanel = memo(function DesktopInspectorPanel(
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-2">
             <div className="flex min-h-[2.5rem] flex-1 flex-wrap content-start items-center gap-1.5 overflow-x-auto pb-px [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {focusRegionRows.length === 0 ? (
+                <span className="shrink-0 rounded-md border border-stone-800/45 bg-stone-950/45 px-2 py-1 text-[10px] text-stone-500">
+                  No Focus Loops yet. Add one to create a tighter playback target.
+                </span>
+              ) : null}
               {focusRegionRows.map((seg) =>
                 focusChipRenameSegmentId === seg.id ? (
                   <input

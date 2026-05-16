@@ -184,4 +184,62 @@ describe("hydrateYoutubeDexieIntoStore", () => {
     expect(st.loopPlaybackEnabled).toBe(true);
     expect(st.minPxPerSec).toBe(61);
   });
+
+  test("preserves valid same-project focus context when practiceState is missing", () => {
+    useWoodshedStore.getState().resetWorkspace();
+    const loop = loopFromBounds(2, 12, 180, "Section");
+    const focus = {
+      id: "focus-1",
+      phraseId: loop.id,
+      name: "Focus",
+      startTime: 4,
+      endTime: 6,
+      notes: "",
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const base: StoredProjectMeta = {
+      id: "same-yt",
+      name: "Same YT",
+      updatedAt: 1,
+      loops: [{ ...loop, segments: [focus] }],
+      activeLoopId: loop.id,
+      mediaSource: {
+        kind: "youtube",
+        videoId: "jNQXAC9IVRw",
+        canonicalUrl: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        durationSeconds: 190,
+      },
+      practiceStateV1: {
+        v: 1,
+        loopPlaybackEnabled: true,
+        loopPracticeScope: "practice_region",
+        activeSegmentId: focus.id,
+        lastPracticeSegmentIdByPhrase: { [loop.id]: focus.id },
+      },
+      minPxPerSecPersist: 61,
+    };
+    const first = validateYoutubeDexieProjectMeta(base);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    hydrateYoutubeDexieIntoStore(first.meta);
+
+    // Simulate active in-session selection before a same-project reload.
+    useWoodshedStore.getState().selectSegment(loop.id, focus.id);
+    useWoodshedStore.getState().setLoopPracticeScope("practice_region");
+
+    const sameWithoutPractice: StoredProjectMeta = {
+      ...base,
+      practiceStateV1: undefined,
+    };
+    const second = validateYoutubeDexieProjectMeta(sameWithoutPractice);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    hydrateYoutubeDexieIntoStore(second.meta);
+
+    const st = useWoodshedStore.getState();
+    expect(st.activeLoopId).toBe(loop.id);
+    expect(st.activeSegmentId).toBe(focus.id);
+    expect(st.loopPracticeScope).toBe("practice_region");
+  });
 });

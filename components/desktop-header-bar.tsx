@@ -215,6 +215,9 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
           className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2"
         >
           <div className="relative min-w-[8rem] max-w-[14rem] flex-1 sm:max-w-[18rem]">
+            <p className="mb-1 pl-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-stone-600">
+              Project
+            </p>
             <MobileProjectSelectorTrigger
               projectName={projectName}
               isDemoProject={isDemoProject}
@@ -260,6 +263,9 @@ export const DesktopHeaderBar = memo(function DesktopHeaderBar(
           </span>
 
           <div className="relative min-w-[8rem] max-w-[16rem] flex-1 sm:max-w-[20rem]">
+            <p className="mb-1 pl-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-stone-600">
+              Practice Section
+            </p>
             <MobilePhraseSelectorTrigger
               activePhraseName={activePhraseName}
               sheetOpen={open === "phrase"}

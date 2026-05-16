@@ -57,3 +57,26 @@ export function describeLoopModeForMobile(mode: LoopModeDisplay): string {
       return getLoopModeDescription(mode);
   }
 }
+
+export function describeLoopWorkflowContext(args: {
+  loopPlaybackEnabled: boolean;
+  loopPracticeScope: LoopPracticeScope;
+  phraseHasFocusRegions: boolean;
+  activePhraseName?: string | null;
+  activeFocusName?: string | null;
+}): string {
+  const mode = getLoopModeDisplay(
+    args.loopPlaybackEnabled,
+    args.loopPracticeScope,
+    args.phraseHasFocusRegions,
+  );
+  const phraseName = args.activePhraseName?.trim();
+  const focusName = args.activeFocusName?.trim();
+  if (mode === "Focus Loop") {
+    return `Focus Loop · ${focusName && focusName.length > 0 ? focusName : "Selected Focus Loop"}`;
+  }
+  if (mode === "Loop Section") {
+    return `Loop Section · ${phraseName && phraseName.length > 0 ? phraseName : "Active Practice Section"}`;
+  }
+  return "Play Through · Full song";
+}

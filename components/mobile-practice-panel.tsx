@@ -1,7 +1,16 @@
 "use client";
 
 import { Pause, Play, RotateCcw } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type RefObject,
+} from "react";
 
 import { HeaderAccount } from "@/components/header-account";
 import { MobileEditActionsSheet } from "@/components/mobile-edit-actions-sheet";
@@ -17,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import type { CloudProjectSummary } from "@/lib/cloud-projects/client";
 import {
+  describeLoopWorkflowContext,
   describeLoopModeForMobile,
   getLoopModeDisplay,
 } from "@/lib/practice-loop-mode";
@@ -163,6 +173,23 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
   );
   const loopTooltip = `${describeLoopModeForMobile(loopCurrent)}. Tap to cycle.`;
   const loopAria = `${loopCurrent}. ${describeLoopModeForMobile(loopCurrent)}. Tap to cycle modes.`;
+  const activeFocusSegmentName = useMemo(() => {
+    if (!focusChipSelectedSegmentId) return null;
+    return (
+      focusSegments.find((seg) => seg.id === focusChipSelectedSegmentId)?.name ?? null
+    );
+  }, [focusChipSelectedSegmentId, focusSegments]);
+  const workflowContext = describeLoopWorkflowContext({
+    loopPlaybackEnabled,
+    loopPracticeScope,
+    phraseHasFocusRegions,
+    activePhraseName,
+    activeFocusName: activeFocusSegmentName,
+  });
+  const modeContextLine = `${mobileEditModeActive ? "Edit" : "Practice"} Mode · ${workflowContext}`;
+  const editTargetSummary = activeFocusSegmentName?.trim()
+    ? `Editing Focus Loop: ${activeFocusSegmentName}`
+    : `Editing Practice Section: ${activePhraseName}`;
 
   const restartHelp =
     phraseHasFocusRegions && loopPracticeScope === "practice_region"
@@ -406,10 +433,27 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
             ? "— · —"
             : `${formatCompactTime(currentTime)} / ${formatCompactTime(duration)}`}
         </p>
+        <p
+          className={cn(
+            "text-center text-[10px] font-medium tracking-tight",
+            timelineIdle ? "text-stone-700" : "text-stone-500",
+          )}
+          aria-label={
+            timelineIdle
+              ? "Workflow context unavailable until audio is loaded"
+              : `Workflow context: ${modeContextLine}`
+          }
+        >
+          {timelineIdle ? "Load audio to begin practice flow" : modeContextLine}
+        </p>
       </div>
 
       {/* Project + Practice Section */}
       <div className="mx-auto w-full max-w-[min(100%,24rem)] border-t border-stone-800/45 pt-2">
+        <div className="mb-1 grid grid-cols-2 gap-2 px-0.5 text-center text-[9px] font-semibold uppercase tracking-[0.12em] text-stone-600">
+          <span>Project</span>
+          <span>Practice Section</span>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <MobileProjectSelectorTrigger
             projectName={projectName}
@@ -460,6 +504,10 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
               );
             })}
           </div>
+        </div>
+      ) : !timelineIdle ? (
+        <div className="mx-auto w-full max-w-[min(100%,24rem)] rounded-md border border-stone-800/45 bg-stone-950/35 px-2.5 py-1.5 text-[10px] text-stone-500">
+          No Focus Loops in this section yet. Use Edit to create a tighter target when needed.
         </div>
       ) : null}
 
@@ -535,9 +583,14 @@ export const MobilePracticeControls = memo(function MobilePracticeControls(
 
       {!timelineIdle && onEnterMobileEditMode && onExitMobileEditMode && mobileEditModeActive ? (
         <div className="mx-auto flex w-full max-w-[min(100%,24rem)] min-h-[40px] items-center justify-between gap-2 rounded-xl border border-violet-500/30 bg-violet-950/18 px-3 py-2">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-200/90">
-            Adjust on waveform
-          </span>
+          <div className="min-w-0">
+            <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-200/90">
+              Adjust on waveform
+            </span>
+            <span className="block truncate text-[10px] text-violet-200/75">
+              {editTargetSummary}
+            </span>
+          </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
