@@ -13,7 +13,8 @@
  *
  * **Future intent:** Fold proven patterns behind `mediaSource.kind` routing once prod import UX lands.
  *
- * **Gaps vs production rollout:** Cloud parity not wired for YouTube; coarse iframe clock vs PCM decode.
+ * Phase 6B — **Synthetic timeline authoring** stays here so production upload keeps WaveSurfer-only
+ * region plugins; gestures map pixels→seconds locally (`NeutralTimelineAuthoringConfig`).
  */
 
 import {
@@ -27,7 +28,10 @@ import { useShallow } from "zustand/react/shallow";
 
 import { DesktopInspectorPanel } from "@/components/desktop-inspector-panel";
 import { DesktopTransportBar } from "@/components/desktop-transport-bar";
-import { NeutralTimelinePrototype } from "@/components/neutral-timeline/neutral-timeline-prototype";
+import {
+  NeutralTimelinePrototype,
+  type SyntheticTimelineAuthoringConfig,
+} from "@/components/neutral-timeline/neutral-timeline-prototype";
 import { PhrasePickerList } from "@/components/phrase-picker-list";
 import {
   applyPlaybackTempo,
@@ -88,6 +92,13 @@ export function YoutubeWorkspace() {
   const [saveBusy, setSaveBusy] = useState(false);
   const [persistenceHint, setPersistenceHint] = useState<string | null>(null);
   const [persistenceErr, setPersistenceErr] = useState<string | null>(null);
+  /** Phase 6B — synthetic strip only (`NeutralTimelinePrototype`); upload workspace unchanged */
+  const [syntheticTimelineMode, setSyntheticTimelineMode] = useState<"pan" | "edit">(
+    "pan",
+  );
+  const [syntheticEditTool, setSyntheticEditTool] = useState<"section" | "focus">(
+    "section",
+  );
 
   const {
     duration,
@@ -117,6 +128,12 @@ export function YoutubeWorkspace() {
     cycleLoopPlaybackMode,
     setActiveLoopTempoFromPercent,
     resetWorkspace,
+    createPhraseFromShiftDrag,
+    createFocusSegmentFromShiftDrag,
+    renameLoop,
+    selectSegment,
+    updateLoopBounds,
+    updateSegment,
   } = useWoodshedStore(
     useShallow((s) => ({
       duration: s.duration,
@@ -149,6 +166,12 @@ export function YoutubeWorkspace() {
       cycleLoopPlaybackMode: s.cycleLoopPlaybackMode,
       setActiveLoopTempoFromPercent: s.setActiveLoopTempoFromPercent,
       resetWorkspace: s.resetWorkspace,
+      createPhraseFromShiftDrag: s.createPhraseFromShiftDrag,
+      createFocusSegmentFromShiftDrag: s.createFocusSegmentFromShiftDrag,
+      renameLoop: s.renameLoop,
+      selectSegment: s.selectSegment,
+      updateLoopBounds: s.updateLoopBounds,
+      updateSegment: s.updateSegment,
     })),
   );
 
@@ -453,6 +476,65 @@ export function YoutubeWorkspace() {
     [exitPhraseFitAfterUserNavigation, setMinPxPerSec],
   );
 
+  const youtubeSyntheticAuthoring = useMemo<
+    SyntheticTimelineAuthoringConfig | undefined
+  >(() => {
+    if (!YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED || !(duration > 0)) return undefined;
+    return {
+      enabled: true,
+      interactionMode: syntheticTimelineMode,
+      onInteractionModeChange: setSyntheticTimelineMode,
+      editTool: syntheticEditTool,
+      onEditToolChange: setSyntheticEditTool,
+      activePhraseId: activeLoopId,
+      onPhraseBandDragCreate: (startSec, endSec) => {
+        exitPhraseFitAfterUserNavigation();
+        const phrase = createPhraseFromShiftDrag(startSec, endSec);
+        if (!phrase) return;
+        const ordinal = useWoodshedStore.getState().loops.length;
+        renameLoop(phrase.id, `Practice Section ${ordinal}`);
+        playbackSurface?.seek(phrase.start);
+        setCurrentTime(phrase.start);
+      },
+      onFocusBandDragCreate: (phraseId, startSec, endSec) => {
+        exitPhraseFitAfterUserNavigation();
+        const built = createFocusSegmentFromShiftDrag({
+          phraseId,
+          startSec,
+          endSec,
+        });
+        if (!built) return;
+        playbackSurface?.seek(built.seekTo);
+        setCurrentTime(built.seekTo);
+      },
+      onSelectPhrase: (id) => selectLoop(id),
+      onSelectFocus: (phraseId, segmentId) =>
+        selectSegment(phraseId, segmentId),
+      onPhraseBoundsCommit: (phraseId, startSec, endSec) =>
+        updateLoopBounds(phraseId, startSec, endSec),
+      onSegmentBoundsCommit: (phraseId, segmentId, startSec, endSec) =>
+        updateSegment(phraseId, segmentId, {
+          startTime: startSec,
+          endTime: endSec,
+        }),
+    };
+  }, [
+    activeLoopId,
+    createFocusSegmentFromShiftDrag,
+    createPhraseFromShiftDrag,
+    duration,
+    exitPhraseFitAfterUserNavigation,
+    playbackSurface,
+    renameLoop,
+    selectLoop,
+    selectSegment,
+    syntheticEditTool,
+    syntheticTimelineMode,
+    updateLoopBounds,
+    updateSegment,
+    setCurrentTime,
+  ]);
+
   const handleTransportTogglePlay = useCallback(() => {
     if (!playbackSurface) return;
     if (playbackSurface.isPlaying()) {
@@ -655,6 +737,7 @@ export function YoutubeWorkspace() {
           pxPerSec={minPxPerSec}
           onPxPerSecChange={handleNeutralTimelinePxPerSec}
           onSeek={handleNeutralTimelineSeek}
+          authoring={youtubeSyntheticAuthoring}
         />
       ) : (
         <div className="border-b border-stone-900 bg-[#070605] px-4 py-6 text-center text-sm text-stone-600">
