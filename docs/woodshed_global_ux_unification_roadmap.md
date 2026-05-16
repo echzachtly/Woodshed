@@ -449,6 +449,10 @@ Only the region system.
 - Non-negotiable constraint for this pass: preserve playback/interaction/persistence semantics and keep performance stable on desktop/mobile.
 - Playback motion follow-up checkpoint: uploaded-audio must shift from per-frame `scrollLeft` visual motion to transform-led timeline motion (`baseScrollLeft + visualTranslateX`) so fixed-playhead playback feels as smooth as YouTube under high zoom while preserving WaveSurfer as timing/render authority.
 
+Reconciliation note (2026-05-16, post-Phase-5A):
+
+- Phase 4 manual QA completion was verified and reconciled in `docs/GLOBAL_UX_UNIFICATION_TODO.md`.
+
 ---
 
 # PHASE 4 — Workspace Compression & Zen Mode

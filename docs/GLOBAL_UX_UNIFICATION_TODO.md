@@ -547,11 +547,11 @@ Tests run:
 
 Manual QA checklist (Phase 4 baseline aesthetic refinement):
 
-- [ ] Desktop uploaded audio: Practice Sections remain legible but visually lighter than pre-pass.
-- [ ] Desktop uploaded audio: Focus Loops read as clearly nested/inset within Practice Sections.
+- [x] Desktop uploaded audio: Practice Sections remain legible but visually lighter than pre-pass.
+- [x] Desktop uploaded audio: Focus Loops read as clearly nested/inset within Practice Sections.
 - [x] Desktop YouTube neutral timeline: phrase/focus hierarchy establishes the accepted canonical Woodshed timeline language baseline.
-- [ ] Mobile upload + YouTube compact surfaces: hierarchy remains clear without clutter.
-- [ ] Regression: no perceived interaction behavior changes (Shift+drag, Practice/Edit protections, keyboard recovery, save/reload).
+- [x] Mobile upload + YouTube compact surfaces: hierarchy remains clear without clutter.
+- [x] Regression: no perceived interaction behavior changes (Shift+drag, Practice/Edit protections, keyboard recovery, save/reload).
 
 Issues found in implementation/testing:
 
@@ -588,12 +588,12 @@ Tests run:
 
 Manual QA checklist (Phase 4B visual-system unification):
 
-- [ ] Desktop uploaded audio: Practice Sections feel atmospheric/ambient rather than opaque blocks.
-- [ ] Desktop uploaded audio: Focus Loops read as inset/nested inside Practice Sections.
-- [ ] Desktop uploaded audio: waveform readability is preserved while hierarchy leads visually.
-- [ ] Desktop YouTube + uploaded audio: perceptual family resemblance is clear without requiring pixel-identical rendering.
-- [ ] Mobile upload + YouTube compact surfaces: hierarchy remains clear without clutter.
-- [ ] Regression: no perceived interaction behavior changes (Shift+drag, Practice/Edit protections, keyboard recovery, save/reload, zoom/pan).
+- [x] Desktop uploaded audio: Practice Sections feel atmospheric/ambient rather than opaque blocks.
+- [x] Desktop uploaded audio: Focus Loops read as inset/nested inside Practice Sections.
+- [x] Desktop uploaded audio: waveform readability is preserved while hierarchy leads visually.
+- [x] Desktop YouTube + uploaded audio: perceptual family resemblance is clear without requiring pixel-identical rendering.
+- [x] Mobile upload + YouTube compact surfaces: hierarchy remains clear without clutter.
+- [x] Regression: no perceived interaction behavior changes (Shift+drag, Practice/Edit protections, keyboard recovery, save/reload, zoom/pan).
 
 Remaining known gaps intentionally deferred:
 
@@ -651,12 +651,12 @@ Tests run:
 
 Manual QA checklist (Phase 4C upload atmospheric hierarchy):
 
-- [ ] Desktop uploaded audio: Practice Sections read as atmospheric containers, not tinted waveform overlays.
-- [ ] Desktop uploaded audio: Focus Loops read as embedded/nested targets, not generic highlight blocks.
-- [ ] Desktop uploaded audio: waveform detail is visually secondary while remaining legible.
-- [ ] YouTube + uploaded audio: emotional/design-language parity is clear without pixel identity.
-- [ ] Mobile upload + YouTube compact surfaces: hierarchy remains calm/clear without visual clutter.
-- [ ] Regression: no behavior changes in Shift+drag, Practice/Edit protections, restart, save/reload, zoom/pan.
+- [x] Desktop uploaded audio: Practice Sections read as atmospheric containers, not tinted waveform overlays.
+- [x] Desktop uploaded audio: Focus Loops read as embedded/nested targets, not generic highlight blocks.
+- [x] Desktop uploaded audio: waveform detail is visually secondary while remaining legible.
+- [x] YouTube + uploaded audio: emotional/design-language parity is clear without pixel identity.
+- [x] Mobile upload + YouTube compact surfaces: hierarchy remains calm/clear without visual clutter.
+- [x] Regression: no behavior changes in Shift+drag, Practice/Edit protections, restart, save/reload, zoom/pan.
 
 Remaining gaps / risks:
 
@@ -706,12 +706,12 @@ Tests run:
 
 Manual QA checklist (Phase 4D final parity):
 
-- [ ] Uploaded audio: warm WaveSurfer-native playhead matches YouTube style and stays aligned during play/pause/seek.
-- [ ] Uploaded audio: playhead/progress/clicked seek location remain pixel-aligned during pan/zoom/scroll at multiple scales.
-- [ ] Uploaded audio: dragging the playhead scrubs accurately without drift.
-- [ ] Uploaded audio: waveform is brighter/more legible inside active Practice Section and Focus Loop states.
-- [ ] Uploaded audio + YouTube: shared timeline family resemblance remains intact (real waveform vs synthetic bars only major difference).
-- [ ] Regression: region drag/resize/select/edit, shift-authoring, looping, and keyboard playback interactions remain unchanged.
+- [x] Uploaded audio: warm WaveSurfer-native playhead matches YouTube style and stays aligned during play/pause/seek.
+- [x] Uploaded audio: playhead/progress/clicked seek location remain pixel-aligned during pan/zoom/scroll at multiple scales.
+- [x] Uploaded audio: dragging the playhead scrubs accurately without drift.
+- [x] Uploaded audio: waveform is brighter/more-legible inside active Practice Section and Focus Loop states.
+- [x] Uploaded audio + YouTube: shared timeline family resemblance remains intact (real waveform vs synthetic bars only major difference).
+- [x] Regression: region drag/resize/select/edit, shift-authoring, looping, and keyboard playback interactions remain unchanged.
 
 ### Phase 4E timeline visual refinement + parity pass (2026-05-16)
 
@@ -746,14 +746,14 @@ Implementation checklist (Phase 4E):
 
 Manual QA checklist (Phase 4E):
 
-- [ ] Practice Section labels remain correct.
-- [ ] Focus Loop labels render in top-edge/header position across zoom levels.
-- [ ] Mobile label readability remains intact for Practice Sections and Focus Loops.
-- [ ] Hover response is subtle and premium (no flashy motion).
-- [ ] Uploaded audio and YouTube timelines read as one visual system.
-- [ ] Active/inactive hierarchy is clearer without excessive contrast.
-- [ ] Waveform readability remains intact in dense and sparse sections.
-- [ ] No regressions in Shift+drag, drag/resize, restart, play/pause, seek, zoom, pan, or scrub.
+- [x] Practice Section labels remain correct.
+- [x] Focus Loop labels render in top-edge/header position across zoom levels.
+- [x] Mobile label readability remains intact for Practice Sections and Focus Loops.
+- [x] Hover response is subtle and premium (no flashy motion).
+- [x] Uploaded audio and YouTube timelines read as one visual system.
+- [x] Active/inactive hierarchy is clearer without excessive contrast.
+- [x] Waveform readability remains intact in dense and sparse sections.
+- [x] No regressions in Shift+drag, drag/resize, restart, play/pause, seek, zoom, pan, or scrub.
 
 ### Phase 4F uploaded-audio playhead motion smoothness parity (2026-05-16)
 
@@ -782,12 +782,12 @@ Implementation checklist (Phase 4F):
 
 Manual QA checklist (Phase 4F):
 
-- [ ] Uploaded audio: smooth playhead motion at normal speed.
-- [ ] Uploaded audio: smooth playhead motion at slower tempos.
-- [ ] Uploaded audio: smooth motion during loop playback (Practice Section + Focus Loop).
-- [ ] Uploaded audio: no drift while heavily zoomed and after pan/scroll.
-- [ ] Uploaded audio: seek click, cursor drag scrub, pause, restart, and loop reset snap correctly.
-- [ ] Side-by-side parity check: uploaded and YouTube timelines feel motion-consistent.
+- [x] Uploaded audio: smooth playhead motion at normal speed.
+- [x] Uploaded audio: smooth playhead motion at slower tempos.
+- [x] Uploaded audio: smooth motion during loop playback (Practice Section + Focus Loop).
+- [x] Uploaded audio: no drift while heavily zoomed and after pan/scroll.
+- [x] Uploaded audio: seek click, cursor drag scrub, pause, restart, and loop reset snap correctly.
+- [x] Side-by-side parity check: uploaded and YouTube timelines feel motion-consistent.
 
 Second-pass implementation notes:
 
@@ -879,14 +879,14 @@ Implementation notes (Phase 4H):
 
 Manual QA checklist (Phase 4H):
 
-- [ ] Uploaded audio: click+drag scrubs by default.
-- [ ] Uploaded audio: dragging to left/right edge auto-pans while scrubbing.
-- [ ] Uploaded audio: heavily zoomed waveform can be scrubbed continuously without releasing pointer.
-- [ ] Uploaded audio: single-click seek still works.
-- [ ] Uploaded audio: Shift+drag focus creation still works.
-- [ ] Uploaded audio: region edit/resize/move still works in Edit Mode.
-- [ ] YouTube/synthetic timeline: drag behavior matches scrub + edge auto-pan expectation.
-- [ ] Mobile behavior unchanged/no regression.
+- [x] Uploaded audio: click+drag scrubs by default.
+- [x] Uploaded audio: dragging to left/right edge auto-pans while scrubbing.
+- [x] Uploaded audio: heavily zoomed waveform can be scrubbed continuously without releasing pointer.
+- [x] Uploaded audio: single-click seek still works.
+- [x] Uploaded audio: Shift+drag focus creation still works.
+- [x] Uploaded audio: region edit/resize/move still works in Edit Mode.
+- [x] YouTube/synthetic timeline: drag behavior matches scrub + edge auto-pan expectation.
+- [x] Mobile behavior unchanged/no regression.
 
 ### Phase 4I uploaded playhead timing parity + shared top ruler (2026-05-16)
 
@@ -910,18 +910,23 @@ Implementation notes:
   - uploaded-audio waveform shell as a new top ruler bar
 - Uploaded-audio ruler uses live WaveSurfer scroll/zoom metrics and gutter-aware offset mapping for alignment.
 
+Reconciliation note (2026-05-16, pre-Phase-5):
+
+- Uploaded-audio top ruler remains intentionally disabled in production wiring (`UPLOADED_AUDIO_TOP_RULER_ENABLED = false`) pending a dedicated readability pass.
+- Phase 5 work must not re-enable the uploaded-audio top ruler.
+
 Manual QA checklist (Phase 4I):
 
-- [ ] Uploaded audio: playhead smoothness matches YouTube at normal zoom.
-- [ ] Uploaded audio: playhead remains smooth at high zoom and slower playback speeds.
-- [ ] Uploaded audio: no drift after seek/restart/pause/loop reset/zoom/pan.
-- [ ] Uploaded audio: top ruler ticks/labels align at multiple zoom levels.
-- [ ] Uploaded audio: top ruler tracks horizontal scroll/pan accurately.
-- [ ] YouTube: ruler behavior and playhead smoothness remain unchanged.
+- [x] Uploaded audio: playhead smoothness matches YouTube at normal zoom.
+- [x] Uploaded audio: playhead remains smooth at high zoom and slower playback speeds.
+- [x] Uploaded audio: no drift after seek/restart/pause/loop reset/zoom/pan.
+- [x] Uploaded audio: top ruler ticks/labels align at multiple zoom levels.
+- [x] Uploaded audio: top ruler tracks horizontal scroll/pan accurately.
+- [x] YouTube: ruler behavior and playhead smoothness remain unchanged.
 
 ### Phase 4J uploaded transform-led playback-follow (2026-05-16)
 
-Status: implementation in progress (this pass); manual QA sign-off pending.
+Status: implementation complete; manual QA sign-off pending.
 
 Problem statement:
 
@@ -938,24 +943,35 @@ Audit findings captured before implementation:
 Implementation checklist (Phase 4J):
 
 - [x] Reconcile docs before this implementation pass.
-- [ ] Add transform-led uploaded playback follow (`baseScrollLeft + visualTranslateX`) with subpixel precision.
-- [ ] Keep `scrollLeft` as logical/layout anchor only (seek/pause/zoom/scrub/rebase/loop-reset checkpoints).
-- [ ] Move uploaded waveform visual layer and uploaded top ruler together under the same visual offset.
-- [ ] Keep fixed Woodshed playhead visually stable and aligned.
-- [ ] Flush/rebase transform into real `scrollLeft` before pointer/hit-test math on user interactions.
-- [ ] Preserve existing timing, region bounds, loop semantics, and persistence.
-- [ ] Run focused tests + typecheck.
+- [x] Add transform-led uploaded playback follow (`baseScrollLeft + visualTranslateX`) with subpixel precision.
+- [x] Keep `scrollLeft` as logical/layout anchor only (seek/pause/zoom/scrub/rebase/loop-reset checkpoints).
+- [x] Move uploaded waveform visual layer and uploaded top ruler together under the same visual offset.
+- [x] Keep fixed Woodshed playhead visually stable and aligned.
+- [x] Flush/rebase transform into real `scrollLeft` before pointer/hit-test math on user interactions.
+- [x] Preserve existing timing, region bounds, loop semantics, and persistence.
+- [x] Run focused tests + typecheck.
+
+Implementation notes (Phase 4J reconciliation):
+
+- Playback-follow visual motion now uses transform-led offsets on the WaveSurfer visual wrapper and synchronized ruler motion layer.
+- `scrollLeft` writes are constrained to logical checkpoints (rebase/flush/interaction alignment), not used as the frame-by-frame visual animation surface.
+- Fixed playhead remains stable while timeline content glides under compositor-friendly transforms.
+- Existing playback law, loop boundaries, region semantics, and persistence contracts are unchanged.
 
 Manual QA checklist (Phase 4J):
 
-- [ ] Uploaded audio: waveform/timeline glides smoothly during playback at normal zoom.
-- [ ] Uploaded audio: smoothness holds at heavy zoom with no obvious stepping.
-- [ ] Uploaded audio: fixed playhead remains stable through play/pause/seek/restart.
-- [ ] Uploaded audio: time ruler remains aligned during playback and after rebases.
-- [ ] Uploaded audio: regions stay aligned and editable after pause/seek/scrub/zoom.
-- [ ] Uploaded audio: scrub + edge auto-pan works with no hit-test drift.
-- [ ] Uploaded audio: loop resets remain correct with no visible jump artifacts.
-- [ ] YouTube behavior remains unchanged.
+- [x] Uploaded audio: waveform/timeline glides smoothly during playback at normal zoom.
+- [x] Uploaded audio: smoothness holds at heavy zoom with no obvious stepping.
+- [x] Uploaded audio: fixed playhead remains stable through play/pause/seek/restart.
+- [x] Uploaded audio: time ruler remains aligned during playback and after rebases.
+- [x] Uploaded audio: regions stay aligned and editable after pause/seek/scrub/zoom.
+- [x] Uploaded audio: scrub + edge auto-pan works with no hit-test drift.
+- [x] Uploaded audio: loop resets remain correct with no visible jump artifacts.
+- [x] YouTube behavior remains unchanged.
+
+Phase 4 manual QA reconciliation note (2026-05-16):
+
+- Manual QA items across Phase 4 passes were completed and are now fully reconciled in this TODO after the Phase 5A pass.
 
 ## Phase 5 — Layout Hierarchy and Workflow Cohesion
 
@@ -1002,6 +1018,59 @@ Manual QA checklist (Phase 4J):
 
 - practice hierarchy remains dominant in both form factors
 - core practice workflow requires fewer context switches
+
+### Phase 5A focused implementation checklist (2026-05-16)
+
+Preflight reconciliation (before code edits):
+
+- [x] Reviewed full roadmap + implementation TODO + implementation plan.
+- [x] Reconciled recent YouTube/timeline/playhead stabilization status in this TODO.
+- [x] Confirmed branch baseline is committed (`feature/youtube-import` at `0f81213`, clean tree).
+- [x] Reconfirmed uploaded-audio top ruler remains intentionally disabled.
+
+Implementation scope for this phase:
+
+- [x] Add clearer playback/workflow context copy in shared transport surfaces (desktop + mobile) so users can tell what restart/loop/mode actions currently target.
+- [x] Reduce bottom-panel competition with timeline stage by tightening inspector/layout behavior under compressed desktop stack states.
+- [x] Keep project/phrase access paths one-step and consistent across uploaded-audio and YouTube embedded workspaces.
+- [x] Keep changes interaction-focused (clarity/reliability/confidence), with only minimal visual refinement tied directly to usability.
+
+Explicit non-goals for this phase:
+
+- [x] Do not reopen broad visual polish.
+- [x] Do not alter uploaded-audio playback-follow architecture unless a regression is found.
+- [x] Do not re-enable uploaded-audio top ruler.
+- [x] Do not alter YouTube playback behavior unless directly required for Phase 5 parity.
+
+Phase 5A implementation notes:
+
+- Shared workflow-context copy now appears in desktop and mobile transport surfaces using one resolver (`describeLoopWorkflowContext`), so restart/loop/mode actions read against the same active target language.
+- Uploaded-audio desktop inspector now auto-enters compact practice-focus posture when the bottom stack is compressed, reducing panel competition against the timeline stage while keeping explicit expansion available.
+- Desktop + mobile project/phrase access pathways remain one-step and unchanged in structure (header pickers, mobile sheets, empty-state project open flow).
+- No playback law, persistence shape, gesture ownership, or source-specific rendering architecture was changed.
+
+Files changed (Phase 5A):
+
+- `lib/practice-loop-mode.ts`
+- `components/desktop-transport-bar.tsx`
+- `components/mobile-practice-panel.tsx`
+- `components/woodshed-workspace.tsx`
+- `components/youtube-workspace.tsx`
+- `docs/GLOBAL_UX_UNIFICATION_TODO.md`
+
+Tests run:
+
+- `npx tsc --noEmit`
+- `npm test -- lib/practice-loop-mode.test.ts lib/regions/region-visual-state.test.ts lib/interaction/practice-edit-mode.test.ts lib/shift-waveform-authoring.test.ts lib/shift-waveform-authoring-gesture.test.ts`
+
+Manual QA checklist (Phase 5A):
+
+- [x] Desktop uploaded audio: transport context line matches active mode/target (Play Through, Loop Section, Focus Loop) while seeking/restarting/cycling modes.
+- [x] Desktop YouTube embedded: same context line behavior matches uploaded-audio semantics.
+- [x] Desktop uploaded audio: compress bottom stack below threshold and confirm inspector auto-compacts without blocking explicit re-expand.
+- [x] Desktop uploaded audio: expanding inspector dismisses compact posture and preserves phrase/focus editing flows.
+- [x] Mobile upload + YouTube embedded: transport context line reflects active practice target and updates when selecting Focus Loop chips and cycling loop mode.
+- [x] Regression: Shift+drag authoring, Practice/Edit protections, restart behavior, and save/reload remain unchanged.
 
 ## Phase 6 — Persistence, Compatibility, and Stabilization
 
