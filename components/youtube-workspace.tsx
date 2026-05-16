@@ -74,6 +74,11 @@ import type { WoodshedMediaSource } from "@/lib/woodshed-media-source";
 import {
   applyYoutubeNeutralTimelinePlaybackIntent,
 } from "@/lib/youtube/neutral-timeline-playback-intent";
+import {
+  canEnterPracticeEditMode,
+  resolvePracticeEditCompatibility,
+  resolvePracticeEditExitCleanup,
+} from "@/lib/interaction/practice-edit-mode";
 import { useWoodshedStore } from "@/store/woodshed-store";
 
 export type YoutubeWorkspaceHandle = {
@@ -803,9 +808,14 @@ export const YoutubeWorkspace = forwardRef<
         : {}),
     };
 
+    const compatibility = resolvePracticeEditCompatibility({
+      editableLoopId,
+      phraseWaveformEditUnlockedById: phraseUnlockForSynth,
+      focusRegionWaveformEditUnlockedById: focusUnlockForSynth,
+    });
     return {
       /** Practice Mode ⇒ false (`phrase`/`focus` unlock maps empty). Edit Mode ⇒ true (matches WaveSurfer). */
-      enabled: youtubeStructuralEditActive,
+      enabled: compatibility.editMode,
       activeLoopId,
       phraseWaveformEditUnlockedById: phraseUnlockForSynth,
       focusRegionWaveformEditUnlockedById: focusUnlockForSynth,
@@ -852,6 +862,7 @@ export const YoutubeWorkspace = forwardRef<
     createFocusSegmentFromShiftDrag,
     createPhraseFromShiftDrag,
     duration,
+    editableLoopId,
     exitPhraseFitAfterUserNavigation,
     focusRegionWaveformEditUnlockedById,
     handleNeutralTimelineSeek,
@@ -1007,12 +1018,34 @@ export const YoutubeWorkspace = forwardRef<
   const handleTransportEditContext = useCallback(() => {
     const st = useWoodshedStore.getState();
     if (!activeLoopId) return;
-    if (st.editableLoopId === activeLoopId) {
-      st.setEditableLoopId(null);
-      /** Practice Mode: clear focus boundary unlock flags so timeline handles cannot stay armed. */
-      for (const sid of Object.keys(st.focusRegionWaveformEditUnlockedById)) {
-        st.setFocusRegionWaveformEditUnlocked(sid, false);
+    const compatibility = resolvePracticeEditCompatibility(st);
+    if (
+      compatibility.editMode &&
+      st.editableLoopId != null &&
+      st.editableLoopId === activeLoopId
+    ) {
+      const cleanup = resolvePracticeEditExitCleanup("explicit_done_action");
+      if (cleanup.clearEditableLoopId) {
+        st.setEditableLoopId(null);
       }
+      if (cleanup.clearFocusUnlocks) {
+        for (const sid of Object.keys(st.focusRegionWaveformEditUnlockedById)) {
+          st.setFocusRegionWaveformEditUnlocked(sid, false);
+        }
+      }
+      if (cleanup.clearPhraseUnlocks) {
+        for (const loopId of Object.keys(st.phraseWaveformEditUnlockedById)) {
+          st.setPhraseWaveformEditUnlocked(loopId, false);
+        }
+      }
+      return;
+    }
+    if (
+      !canEnterPracticeEditMode({
+        formFactor: "desktop",
+        intent: "explicit_edit_action",
+      })
+    ) {
       return;
     }
     const loop = st.loops.find((l) => l.id === activeLoopId);
@@ -1023,6 +1056,9 @@ export const YoutubeWorkspace = forwardRef<
     if (hasSeg) {
       st.requestInspectorSegmentFieldFocus();
       return;
+    }
+    for (const sid of Object.keys(st.focusRegionWaveformEditUnlockedById)) {
+      st.setFocusRegionWaveformEditUnlocked(sid, false);
     }
     st.setEditableLoopId(activeLoopId);
     st.setActiveSegmentId(null);

@@ -79,6 +79,11 @@ import { formatFilenameAsProjectName } from "@/lib/format-upload-project-name";
 import { resolveFocusPlaybackSegment } from "@/lib/focus-playback-segment";
 import { resolveTimelinePlaybackIntent } from "@/lib/interaction/timeline-playback-intent";
 import {
+  canEnterPracticeEditMode,
+  resolvePracticeEditCompatibility,
+  resolvePracticeEditExitCleanup,
+} from "@/lib/interaction/practice-edit-mode";
+import {
   buildPlaybackLoopRail,
 } from "@/lib/playback-loop-rail";
 import { resolvePlaybackRestartTarget } from "@/lib/playback/restart-target";
@@ -104,7 +109,6 @@ import { isKeyboardFocusInTextField } from "@/lib/woodshed-keyboard";
 import {
   enterFocusLoopStructuralEdit,
   enterPracticeSectionStructuralEdit,
-  isStructuralPracticeMode,
 } from "@/lib/woodshed-enter-region-edit";
 import { WAVEFORM_HORIZONTAL_GUTTER_PX } from "@/lib/waveform-gutter";
 import { nanoid } from "@/lib/id";
@@ -196,6 +200,10 @@ type RegionHandle = {
   remove: () => void;
   on: (evt: string, cb: (...args: unknown[]) => void) => void;
 };
+
+type ExistingRegionDoubleClickTarget =
+  | { kind: "phrase"; phraseId: string }
+  | { kind: "focus"; phraseId: string; segmentId: string };
 
 async function loadRegionsFactory(): Promise<unknown> {
   const mod = await import("wavesurfer.js/dist/plugins/regions.esm.js");
@@ -301,6 +309,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   const releaseShiftAuthoringRef = useRef<(() => void) | null>(null);
   /** Desktop click parity adapter: WaveSurfer direct-click -> shared timeline intent. */
   const releaseWaveClickIntentRef = useRef<(() => void) | null>(null);
+  /** Desktop region-only double-click adapter: existing phrase/focus -> edit entry. */
+  const releaseWaveRegionDblClickRef = useRef<(() => void) | null>(null);
   /** WaveSurfer mount effect reads this ref — keep in sync with `isMobilePractice`. */
   const mobilePracticeModeRef = useRef(false);
 
@@ -1122,6 +1132,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           isMobilePractice: () => mobilePracticeModeRef.current,
           getMinPxPerSec: () => useWoodshedStore.getState().minPxPerSec,
           commit: ({ startSec, endSec }) => {
+            if (
+              !canEnterPracticeEditMode({
+                formFactor: "desktop",
+                intent: "shift_drag_create",
+              })
+            ) {
+              return null;
+            }
             const st = useWoodshedStore.getState();
             const phraseId = st.activeLoopId;
             const loop = phraseId
@@ -1191,6 +1209,17 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             st.setCurrentTime(seekSec);
           },
         });
+        releaseWaveRegionDblClickRef.current?.();
+        releaseWaveRegionDblClickRef.current =
+          installWaveformRegionDoubleClickEditEntry({
+            scrollContainer: panDom.scrollContainer,
+            getWave: () => wavesurferRef.current,
+            getMinPxPerSec: () => useWoodshedStore.getState().minPxPerSec,
+            isMobilePractice: () => mobilePracticeModeRef.current,
+            resolveFallbackTargetAtSeconds:
+              resolveExistingRegionDoubleClickTargetFromTime,
+            onRegionDoubleClick: handleExistingRegionDoubleClick,
+          });
         pinchZoomReleaseRef.current = installWaveformPinchZoom(ws, {
           isMobilePractice: () => mobilePracticeModeRef.current,
           getStore: () => useWoodshedStore.getState(),
@@ -1253,20 +1282,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           { passive: true },
         );
       }
-
-      ws.on("dblclick", (relativeX) => {
-        if (mobilePracticeModeRef.current) return;
-        const dur = wsPlaybackSurface.getDuration();
-        if (!dur) return;
-        const midpoint = clamp(relativeX, 0, 1) * dur;
-        useWoodshedStore
-          .getState()
-          .addLoopAround(
-            midpoint,
-            Math.min(2, Math.max(dur * 0.015, 0.25)),
-            "Quick phrase",
-          );
-      });
 
       let lastTransportUiMs = 0;
 
@@ -1400,6 +1415,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
       releaseShiftAuthoringRef.current = null;
       releaseWaveClickIntentRef.current?.();
       releaseWaveClickIntentRef.current = null;
+      releaseWaveRegionDblClickRef.current?.();
+      releaseWaveRegionDblClickRef.current = null;
       pinchZoomReleaseRef.current?.();
       pinchZoomReleaseRef.current = null;
       wavesurferRef.current?.destroy();
@@ -1727,6 +1744,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             if (selected) {
               el.classList.add("woodshed-region-segment-selected");
             }
+            el.dataset.regionKind = "focus";
+            el.dataset.phraseId = renderedLoop.id;
+            el.dataset.segmentId = seg.id;
             el.style.pointerEvents = "none";
             applyMobileReadonlyFocusRegionVisuals(
               el,
@@ -1736,6 +1756,9 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             );
           } else {
             el.setAttribute("data-focus-palette", String(paletteIndex));
+            el.dataset.regionKind = "focus";
+            el.dataset.phraseId = renderedLoop.id;
+            el.dataset.segmentId = seg.id;
             el.style.pointerEvents = "auto";
             if (selected) {
               el.classList.add("woodshed-region-segment-selected");
@@ -1751,13 +1774,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
               loopPracticeScope,
               phraseHasSegForRegions,
             );
-            const onDesktopFocusDblClick = (ev: MouseEvent) => {
-              if (!isStructuralPracticeMode()) return;
-              ev.preventDefault();
-              ev.stopPropagation();
-              enterFocusLoopStructuralEdit(renderedLoop.id, seg.id);
-            };
-            el.addEventListener("dblclick", onDesktopFocusDblClick);
           }
         });
 
@@ -1858,6 +1874,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
             ? "woodshed-region-active"
             : "woodshed-region-locked";
         el.classList.add(className);
+        el.dataset.regionKind = "phrase";
+        el.dataset.phraseId = loop.id;
         applyPhraseRegionVisuals(
           el,
           isEditing ? "editing" : isActive ? "active" : "locked",
@@ -1865,15 +1883,6 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
           loopPracticeScope,
           phraseHasSegForRegions,
         );
-        if (!isMobilePractice) {
-          const onDesktopPhraseDblClick = (ev: MouseEvent) => {
-            if (!isStructuralPracticeMode()) return;
-            ev.preventDefault();
-            ev.stopPropagation();
-            enterPracticeSectionStructuralEdit(loop.id);
-          };
-          el.addEventListener("dblclick", onDesktopPhraseDblClick);
-        }
         if (isMobilePractice && !mobilePhraseRefine) {
           el.style.pointerEvents = "none";
         } else if (allowResize) {
@@ -2524,6 +2533,14 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
 
   const enterMobileEditMode = useCallback(() => {
     if (!isMobilePractice || playbackChromeIdle || isDemoProject) return;
+    if (
+      !canEnterPracticeEditMode({
+        formFactor: "mobile",
+        intent: "explicit_edit_action",
+      })
+    ) {
+      return;
+    }
     setMobileEditModeActive(true);
     const playback = getPlaybackSurface();
     if (playback?.isPlaying()) playback.pause();
@@ -2536,6 +2553,8 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
   ]);
 
   const exitMobileEditMode = useCallback(() => {
+    const st = useWoodshedStore.getState();
+    exitDesktopEditModeToPractice(st);
     setMobileEditModeActive(false);
   }, []);
 
@@ -2546,24 +2565,73 @@ const WoodshedWorkspace = memo(function WoodshedWorkspace() {
     else void playback.play();
   }, [getPlaybackSurface]);
 
+  const handleExistingRegionDoubleClick = useCallback(
+    (target: ExistingRegionDoubleClickTarget) => {
+      const st = useWoodshedStore.getState();
+      const compatibility = resolvePracticeEditCompatibility(st);
+      if (compatibility.editMode) {
+        exitDesktopEditModeToPractice(st);
+        return;
+      }
+      if (target.kind === "focus") {
+        enterFocusLoopStructuralEdit(target.phraseId, target.segmentId);
+        return;
+      }
+      enterPracticeSectionStructuralEdit(target.phraseId);
+    },
+    [],
+  );
+
+  const resolveExistingRegionDoubleClickTargetFromTime = useCallback(
+    (seconds: number): ExistingRegionDoubleClickTarget | null => {
+      if (!Number.isFinite(seconds)) return null;
+      const st = useWoodshedStore.getState();
+      for (const loop of st.loops) {
+        if (!(loop.end > loop.start)) continue;
+        if (seconds < loop.start || seconds > loop.end) continue;
+        const hitSeg = loop.segments?.find(
+          (seg) =>
+            seg.endTime > seg.startTime &&
+            seconds >= seg.startTime &&
+            seconds <= seg.endTime,
+        );
+        if (hitSeg) {
+          return {
+            kind: "focus",
+            phraseId: loop.id,
+            segmentId: hitSeg.id,
+          };
+        }
+        return { kind: "phrase", phraseId: loop.id };
+      }
+      return null;
+    },
+    [],
+  );
+
   const handleTransportEditContext = useCallback(() => {
     const st = useWoodshedStore.getState();
     if (!activeLoopId) return;
-    if (st.editableLoopId === activeLoopId) {
-      st.setEditableLoopId(null);
+    const compatibility = resolvePracticeEditCompatibility(st);
+    if (compatibility.editMode) {
+      exitDesktopEditModeToPractice(st);
       return;
     }
-    const loop = st.loops.find((l) => l.id === activeLoopId);
+    if (
+      !canEnterPracticeEditMode({
+        formFactor: "desktop",
+        intent: "explicit_edit_action",
+      })
+    ) {
+      return;
+    }
     const segId = st.activeSegmentId;
-    const hasSeg = Boolean(
-      segId && loop?.segments?.some((s) => s.id === segId),
-    );
-    if (hasSeg) {
+    if (segId) {
+      enterFocusLoopStructuralEdit(activeLoopId, segId);
       st.requestInspectorSegmentFieldFocus();
       return;
     }
-    st.setEditableLoopId(activeLoopId);
-    st.setActiveSegmentId(null);
+    enterPracticeSectionStructuralEdit(activeLoopId);
   }, [activeLoopId]);
 
   const handleTransportDeleteContext = useCallback(() => {
@@ -3467,6 +3535,119 @@ function installWaveformClickIntentParity(args: {
   return () => {
     scrollContainer.removeEventListener("click", onClick);
   };
+}
+
+function installWaveformRegionDoubleClickEditEntry(args: {
+  scrollContainer: HTMLElement;
+  getWave: () => WaveSurfer | null;
+  getMinPxPerSec: () => number;
+  isMobilePractice: () => boolean;
+  resolveFallbackTargetAtSeconds: (
+    seconds: number,
+  ) => ExistingRegionDoubleClickTarget | null;
+  onRegionDoubleClick: (target: ExistingRegionDoubleClickTarget) => void;
+}): () => void {
+  const {
+    scrollContainer,
+    getWave,
+    getMinPxPerSec,
+    isMobilePractice,
+    resolveFallbackTargetAtSeconds,
+    onRegionDoubleClick,
+  } = args;
+
+  let lastTargetKey: string | null = null;
+  let lastTargetClickMs = 0;
+  const DOUBLE_CLICK_WINDOW_MS = 325;
+
+  const resolveTargetFromDom = (eventTarget: Element): ExistingRegionDoubleClickTarget | null => {
+    const focusRegionEl = eventTarget.closest<HTMLElement>(
+      '.woodshed-region-segment[data-region-kind="focus"]',
+    );
+    if (focusRegionEl) {
+      const phraseId = focusRegionEl.dataset.phraseId;
+      const segmentId = focusRegionEl.dataset.segmentId;
+      if (phraseId && segmentId) {
+        return { kind: "focus", phraseId, segmentId };
+      }
+    }
+    const phraseRegionEl = eventTarget.closest<HTMLElement>(
+      '[data-region-kind="phrase"]',
+    );
+    if (!phraseRegionEl) return null;
+    const phraseId = phraseRegionEl.dataset.phraseId;
+    if (!phraseId) return null;
+    return { kind: "phrase", phraseId };
+  };
+
+  const keyForTarget = (target: ExistingRegionDoubleClickTarget): string =>
+    target.kind === "focus"
+      ? `focus:${target.phraseId}:${target.segmentId}`
+      : `phrase:${target.phraseId}`;
+
+  const onClickCapture = (event: MouseEvent) => {
+    if (isMobilePractice()) return;
+    if (event.button !== 0) return;
+    const target = event.target as Element | null;
+    if (!target) return;
+    if (target.closest('[part*="region-handle"]')) return;
+    let resolvedTarget = resolveTargetFromDom(target);
+    if (!resolvedTarget) {
+      const ws = getWave();
+      const pxPerSec = getMinPxPerSec();
+      if (ws && Number.isFinite(pxPerSec) && pxPerSec > 0) {
+        const seconds = timeAtWaveformClientX(
+          ws,
+          scrollContainer,
+          event.clientX,
+          pxPerSec,
+        );
+        resolvedTarget = resolveFallbackTargetAtSeconds(seconds);
+      }
+    }
+    if (!resolvedTarget) {
+      lastTargetKey = null;
+      lastTargetClickMs = 0;
+      return;
+    }
+    const now = performance.now();
+    const key = keyForTarget(resolvedTarget);
+    const isDouble =
+      lastTargetKey === key && now - lastTargetClickMs <= DOUBLE_CLICK_WINDOW_MS;
+    lastTargetKey = key;
+    lastTargetClickMs = now;
+    if (!isDouble) return;
+    lastTargetKey = null;
+    lastTargetClickMs = 0;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    onRegionDoubleClick(resolvedTarget);
+  };
+
+  scrollContainer.addEventListener("click", onClickCapture, true);
+  return () => {
+    scrollContainer.removeEventListener("click", onClickCapture, true);
+  };
+}
+
+function exitDesktopEditModeToPractice(snapshot: ReturnType<
+  typeof useWoodshedStore.getState
+>) {
+  const cleanup = resolvePracticeEditExitCleanup("explicit_done_action");
+  if (cleanup.clearEditableLoopId) {
+    snapshot.setEditableLoopId(null);
+  }
+  if (cleanup.clearFocusUnlocks) {
+    for (const sid of Object.keys(snapshot.focusRegionWaveformEditUnlockedById)) {
+      snapshot.setFocusRegionWaveformEditUnlocked(sid, false);
+    }
+  }
+  if (cleanup.clearPhraseUnlocks) {
+    for (const loopId of Object.keys(snapshot.phraseWaveformEditUnlockedById)) {
+      snapshot.setPhraseWaveformEditUnlocked(loopId, false);
+    }
+  }
 }
 
 const WS_DIAG_KEY = "__woodshedWsDiagIds";

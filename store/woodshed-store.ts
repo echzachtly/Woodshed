@@ -11,6 +11,10 @@ import {
   type PracticeLoop,
 } from "@/lib/loop-engine";
 import { resolveFocusDeletionFallbackId } from "@/lib/focus-playback-segment";
+import {
+  hasProjectOrMediaContextSwitch,
+  normalizePracticeEditAfterContextSwitch,
+} from "@/lib/interaction/practice-edit-mode";
 import { nanoid } from "@/lib/id";
 import { normalizePlaybackScopeSnapshot } from "@/lib/playback/playback-scope-normalization";
 import {
@@ -269,11 +273,26 @@ export const useWoodshedStore = create<WoodshedStore>((set, get) => ({
     }));
   },
   setProjectMeta: (projectId, projectName, mediaSource) =>
-    set((state) => ({
-      projectId,
-      projectName,
-      ...(mediaSource !== undefined ? { mediaSource } : {}),
-    })),
+    set((state) => {
+      const nextMediaSource = mediaSource ?? state.mediaSource;
+      const switchState = hasProjectOrMediaContextSwitch({
+        previousProjectId: state.projectId,
+        nextProjectId: projectId,
+        previousMediaSource: state.mediaSource,
+        nextMediaSource,
+      });
+      const normalizedEditState = normalizePracticeEditAfterContextSwitch({
+        state,
+        projectSwitched: switchState.projectSwitched,
+        mediaSwitched: switchState.mediaSwitched,
+      });
+      return {
+        projectId,
+        projectName,
+        mediaSource: nextMediaSource,
+        ...normalizedEditState,
+      };
+    }),
   setDuration: (duration) => set({ duration }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentTime: (currentTime) => set({ currentTime }),

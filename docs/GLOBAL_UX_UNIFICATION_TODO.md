@@ -168,7 +168,7 @@ Remaining restart parity gaps / risks:
 
 ### Phase 1D playback scope normalization and stale-state cleanup (2026-05-15)
 
-Status: in progress (shared normalization helper extracted; first high-value integrations landed).
+Status: complete (manual checklist passed).
 
 Files changed in this pass:
 
@@ -191,16 +191,79 @@ Tests added:
 
 Manual checklist (Phase 1D):
 
-- [ ] Uploaded audio: delete active Focus Loop -> deterministic fallback scope -> restart target still correct
-- [ ] Uploaded audio: delete active Practice Section -> no stale playback scope/id remains
-- [ ] YouTube: repeat deletion and scope fallback checks
-- [ ] Project switching between different section/focus structures preserves no stale focus/section behavior
-- [ ] Save/reload project with active focus/section state hydrates coherent scope
+- [x] Uploaded audio: delete active Focus Loop -> deterministic fallback scope -> restart target still correct
+- [x] Uploaded audio: delete active Practice Section -> no stale playback scope/id remains
+- [x] YouTube: repeat deletion and scope fallback checks
+- [x] Project switching between different section/focus structures preserves no stale focus/section behavior
+- [x] Save/reload project with active focus/section state hydrates coherent scope
 
 Remaining gaps / risks (Phase 1D):
 
-- Manual parity sweep for deletion/project-switch/reload normalization paths still pending.
 - A few non-critical callsites still perform local state shaping before normalization (acceptable for now, but can be reduced later).
+
+### Phase 1E Practice/Edit mode transition helper extraction (2026-05-15)
+
+Status: in progress (pure shared helper extracted; safe callsites integrated first).
+
+State-based existing-region double-click decision (desktop uploaded-audio):
+
+- background double-click never creates a Practice Section
+- existing-region double-click is mode-aware:
+  - Practice Mode -> enter Edit Mode for clicked Practice Section / Focus Loop context
+  - Edit Mode -> exit to Practice Mode and clear editable/unlocked state
+
+Files changed in this pass:
+
+- `lib/interaction/practice-edit-mode.ts` (new canonical Practice/Edit transition helper and lock/unlock compatibility mapping)
+- `lib/interaction/practice-edit-mode.test.ts` (new transition contract tests)
+- `lib/woodshed-enter-region-edit.ts` (double-click structural entry + practice-mode alias now consume shared helper)
+- `store/woodshed-store.ts` (`setProjectMeta` now applies defensive Practice/Edit cleanup on project/media context switch)
+- `components/woodshed-workspace.tsx` (desktop Shift+drag entry, explicit transport edit/done, and mobile explicit edit/done now consume shared transition helper; WaveSurfer double-click quick-create removed; existing-region double-click now routes to edit-entry only)
+- `components/woodshed-workspace.tsx` (state-based existing-region double-click handler (`handleExistingRegionDoubleClick`) now shares the same enter/exit behavior as the lock/mode toggle; Practice Section dblclick reliability hardened with region+time fallback target resolution across remounts)
+- `components/youtube-workspace.tsx` (synthetic timeline edit-mode derivation + explicit transport edit/done now consume shared transition helper)
+
+Tests added:
+
+- `lib/interaction/practice-edit-mode.test.ts`
+  - desktop Shift+drag intent may enter Edit Mode
+  - desktop double-click structural edit intent may enter Edit Mode
+  - desktop explicit edit action may enter Edit Mode
+  - mobile tap/drag/chip selection does not auto-enter Edit Mode
+  - mobile explicit edit action may enter Edit Mode
+  - explicit Done/exit clears editable + unlock state
+  - project/media switch defensively exits Edit Mode
+  - lock/unlock compatibility mapping remains stable
+
+Manual checklist (Phase 1E):
+
+- [ ] Desktop uploaded audio: Practice Mode blocks accidental drag/resize edits
+- [ ] Desktop uploaded audio: double-click empty waveform space does not create a new Practice Section
+- [ ] Desktop uploaded audio: Shift+drag intentionally creates Focus Loop and enters/uses Edit Mode correctly
+- [ ] Desktop uploaded audio: double-click is limited to edit entry on existing Practice Section / Focus Loop only
+- [ ] Desktop uploaded audio: Done/exit returns to protected Practice Mode
+- [ ] Desktop YouTube: Shift+drag / edit entry behavior matches global intent where supported
+- [ ] Desktop YouTube: no regression to timeline playback click behavior
+- [ ] Mobile: tap/drag/chip selection does not implicitly enter Edit Mode
+- [ ] Mobile: explicit Edit control enters Edit Mode
+- [ ] Mobile: Done/exit returns to Practice Mode
+- [ ] Mobile: practice playback remains fast and protected
+- [ ] Regression: switch projects while in Edit Mode leaves no stale editable/unlocked state
+- [ ] Regression: save/reload does not hydrate into unsafe accidental edit posture
+
+Manual test results (Phase 1E follow-up):
+
+- [x] Desktop uploaded audio: double-click empty waveform background does not create a new Practice Section.
+- [ ] Desktop uploaded audio: double-click existing Practice Section enters Edit Mode (WaveSurfer region-element + delegated dblclick edit-entry wiring landed; re-verify manually).
+- [ ] Desktop uploaded audio: double-click existing Focus Loop enters Focus edit context (WaveSurfer region-element + delegated dblclick edit-entry wiring landed; re-verify manually).
+- [ ] Desktop uploaded audio: lock/mode button exits Focus/phrase edit state back to Practice Mode (mode toggle no longer depends on Advanced-tab-only flow; re-verify manually).
+- [ ] Desktop uploaded audio: after Shift+drag Focus Loop creation, lock/mode button reliably returns to Practice Mode (stuck-edit regression fix; re-verify manually).
+- [ ] Desktop uploaded audio: Practice Section double-click reliably toggles Practice<->Edit state (including remount-sensitive paths).
+
+Remaining gaps / risks (Phase 1E):
+
+- Canonical waveform creation gesture is now Shift+drag; double-click quick-create is intentionally removed for uploaded-audio WaveSurfer.
+- Resize/trim handle auto-entry intent is represented in shared rules but not yet wired through every renderer-specific boundary-handle path.
+- Internal state naming still includes lock/unlock aliases by design; full naming migration is intentionally deferred.
 
 ## Phase 2 — Playback Intelligence Unification
 
