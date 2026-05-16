@@ -1,17 +1,5 @@
-import dynamic from "next/dynamic";
 import { YOUTUBE_WORKSPACE_PROTOTYPE_ENABLED } from "@/lib/youtube/constants";
-
-const YoutubeWorkspace = dynamic(
-  () => import("@/components/youtube-workspace").then((m) => m.YoutubeWorkspace),
-  {
-    ssr: false,
-    loading: () => (
-      <main className="mx-auto max-w-2xl px-6 py-12 text-stone-300">
-        Loading YouTube workspace...
-      </main>
-    ),
-  },
-);
+import { YoutubeWorkspaceClient } from "./youtube-workspace-client";
 
 /**
  * Phase 5 dev route — isolated YouTube practice workspace (no upload workspace edits).
@@ -36,7 +24,7 @@ export default function YoutubeWorkspaceDevPage() {
           </p>
         </main>
       ) : (
-        <YoutubeWorkspace />
+        <YoutubeWorkspaceClient />
       )}
     </div>
   );

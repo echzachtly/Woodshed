@@ -1,0 +1,73 @@
+# Unified Timeline Technical Spec
+
+## Reconciliation Note (2026-05-16)
+
+This is a draft technical sketch. During the docs-only planning pass:
+
+- No implementation or scaffolding files are being created yet.
+- Contract formalization is deferred to implementation start (Phase B in `docs/unified-timeline/UNIFIED_TIMELINE_PHASE_PLAN.md`).
+- Rollout remains experimental and feature-flagged.
+- Uploaded audio remains real peaks; YouTube remains synthetic peaks.
+
+## Purpose
+
+Define the technical contract for the unified timeline system.
+
+## Component Target (Deferred)
+
+Implementation target when coding phase begins:
+
+`components/timeline/unified-timeline.tsx`
+
+Supporting files may include (do not scaffold during docs-only pass):
+
+- `lib/timeline/unified-timeline-types.ts`
+- `lib/timeline/peak-generation.ts`
+- `lib/timeline/synthetic-peaks.ts`
+- `lib/timeline/timeline-coordinates.ts`
+- `lib/timeline/timeline-interactions.ts`
+- `lib/timeline/timeline-rendering.ts`
+
+## Data Model
+
+```ts
+type MediaSourceKind = "upload" | "youtube";
+
+type TimelinePeakSource = "real" | "synthetic";
+
+type TimelinePeakData = {
+  source: TimelinePeakSource;
+  duration: number;
+  samplesPerSecond?: number;
+  peaks: number[];
+};
+
+type UnifiedTimelineRegion = {
+  id: string;
+  type: "practice-section" | "focus-loop";
+  start: number;
+  end: number;
+  parentId?: string;
+  label?: string;
+  color?: string;
+  isSelected?: boolean;
+};
+
+type UnifiedTimelineMode = "practice" | "edit";
+
+type UnifiedTimelineProps = {
+  mediaSourceKind: MediaSourceKind;
+  duration: number;
+  currentTime: number;
+  isPlaying: boolean;
+  mode: UnifiedTimelineMode;
+  peaks: TimelinePeakData;
+  regions: UnifiedTimelineRegion[];
+  selectedRegionId?: string;
+  zoomLevel: number;
+  onSeek: (time: number) => void;
+  onRegionSelect: (regionId: string) => void;
+  onRegionCreate: (region: Omit<UnifiedTimelineRegion, "id">) => void;
+  onRegionUpdate: (regionId: string, patch: Partial<UnifiedTimelineRegion>) => void;
+  onModeChange?: (mode: UnifiedTimelineMode) => void;
+};

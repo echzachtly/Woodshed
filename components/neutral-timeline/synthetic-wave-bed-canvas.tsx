@@ -115,7 +115,7 @@ export const SyntheticWaveBedCanvas = memo(function SyntheticWaveBedCanvas(
     const amp = heightPx * 0.098;
     const step = Math.max(2, Math.ceil(widthPx / 700));
 
-    let split = Math.min(widthPx, Math.max(0, playedWidthPx));
+    const split = Math.min(widthPx, Math.max(0, playedWidthPx));
 
     const ptsPlayed =
       split > 1e-6 ? sampleWaveTopYs(0, split, widthPx, step, mid, amp) : [];

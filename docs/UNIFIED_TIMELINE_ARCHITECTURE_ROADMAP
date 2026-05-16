@@ -1,0 +1,214 @@
+# Unified Timeline Architecture Roadmap
+
+## Reconciliation Note (2026-05-16)
+
+This file is retained as a historical draft.
+
+Planning authority now lives in:
+
+- `docs/unified-timeline/UNIFIED_TIMELINE_ADR.md`
+- `docs/unified-timeline/UNIFIED_TIMELINE_PHASE_PLAN.md`
+- `docs/unified-timeline/UNIFIED_TIMELINE_REGRESSION_MATRIX.md`
+- `docs/unified-timeline/UNIFIED_TIMELINE_ROLLBACK_RUNBOOK.md`
+
+Direction clarification:
+
+- Experimental and feature-flagged first (not immediate canonical default).
+- Uploaded audio: unified shell + real peaks.
+- YouTube: unified shell + synthetic peaks.
+- Not a media-engine rewrite and not immediate WaveSurfer removal.
+
+## Goal
+
+Create one shared timeline system for both uploaded audio projects and YouTube projects so behavior and visuals are consistent across the app.
+
+## Core Direction
+
+Replace the split model:
+
+- Uploaded audio = WaveSurfer waveform/timeline
+- YouTube = synthetic visualizer/timeline
+
+With one long-term model:
+
+- Uploaded audio = unified timeline shell + real waveform peaks
+- YouTube = unified synthetic timeline shell + generated/synthetic peaks
+
+The timeline should own:
+
+- Click-to-seek
+- Drag selection
+- Shift+drag Focus Loop creation
+- Region rendering
+- Playhead rendering
+- Zoom
+- Pan/scroll
+- Practice/Edit mode behavior
+- Mobile timeline behavior
+
+Audio playback engines may remain source-specific.
+
+## Non-Goals
+
+Do not remove existing WaveSurfer implementation immediately.
+Do not break saved project data.
+Do not change Practice Section / Focus Loop terminology.
+Do not change cloud schema unless absolutely necessary.
+Do not change YouTube playback integration unless required.
+
+## Fork Strategy
+
+Create a new branch/fork after Phase 6 is complete:
+
+`experiment/unified-timeline-renderer`
+
+The current implementation should remain recoverable.
+
+## Phases
+
+### Phase 1 — Architecture Audit
+
+- Review current upload waveform implementation.
+- Review current YouTube synthetic timeline implementation.
+- Identify reusable timeline interaction logic.
+- Identify WaveSurfer dependencies that are truly required.
+- Document all timeline-related components, hooks, and utilities.
+
+Deliverable:
+
+- Implementation notes added to this roadmap.
+
+### Phase 2 — Shared Timeline Contract
+
+Create a source-agnostic timeline data model.
+
+Required concepts:
+
+- duration
+- currentTime
+- zoomLevel / pixelsPerSecond
+- scrollLeft
+- viewport width
+- peaks data
+- regions
+- selected Practice Section
+- selected Focus Loop
+- mode: Practice or Edit
+- media source kind: upload or youtube
+
+Deliverable:
+
+- `lib/timeline/unified-timeline-types.ts`
+
+### Phase 3 — Unified Timeline Renderer Prototype
+
+Create a new `UnifiedTimeline` component behind a feature flag.
+
+Recommended flags:
+
+- `NEXT_PUBLIC_WOODSHED_UNIFIED_TIMELINE_UPLOAD`
+- `NEXT_PUBLIC_WOODSHED_UNIFIED_TIMELINE_YOUTUBE`
+- `NEXT_PUBLIC_WOODSHED_UNIFIED_TIMELINE_MOBILE`
+
+The component should support:
+
+- real peaks
+- synthetic peaks
+- playhead
+- Practice Sections
+- Focus Loops
+- selection
+- click-to-seek
+- cursor-centered zoom
+- horizontal pan
+
+Deliverable:
+
+- Upload and YouTube projects can both render through the same timeline shell.
+
+### Phase 4 — Uploaded Audio Peak Extraction
+
+For uploaded audio, use decoded audio data to generate real waveform peaks.
+
+Preferred path:
+
+- Use Web Audio API / decoded AudioBuffer.
+- Generate normalized peak arrays.
+- Cache peaks locally if practical.
+- Render peaks in the unified timeline.
+
+WaveSurfer may temporarily remain as an audio backend, but should no longer own timeline interaction.
+
+Deliverable:
+
+- Uploaded audio projects visually show the actual song waveform inside the unified timeline.
+
+### Phase 5 — YouTube Synthetic Peak Parity
+
+For YouTube projects, use the same renderer with synthetic peaks.
+
+The visual shape does not need to claim to be real audio.
+It should look consistent with uploaded audio but remain clearly generated.
+
+Deliverable:
+
+- YouTube and upload timelines share visual language, spacing, colors, region chrome, zoom behavior, and playhead behavior.
+
+### Phase 6 — Interaction Parity
+
+Ensure all timeline interactions behave identically across upload and YouTube:
+
+- Click-to-seek
+- Cursor-centered zoom
+- Pan
+- Playhead tracking
+- Practice Section selection
+- Focus Loop selection
+- Shift+drag creation
+- Double-click edit behavior
+- Practice/Edit mode lock behavior
+- Save/reload behavior
+
+Deliverable:
+
+- No source-specific timeline behavior differences unless explicitly documented.
+
+### Phase 7 — Mobile Parity
+
+Apply unified timeline behavior to mobile layouts.
+
+Mobile should preserve:
+
+- practice-first hierarchy
+- clean transport controls
+- timeline zoom
+- section/focus navigation
+- edit access when intentionally entered
+
+Deliverable:
+
+- Mobile upload and YouTube projects feel like the same app.
+
+### Phase 8 — Retire or Contain WaveSurfer
+
+After parity is proven:
+
+Option A:
+- Keep WaveSurfer only as an audio decoding/playback helper.
+
+Option B:
+- Remove WaveSurfer from active timeline rendering entirely.
+
+Do not remove the fallback until manual QA passes.
+
+## Acceptance Criteria
+
+- Upload and YouTube projects use the same timeline component.
+- Upload projects show real waveform data.
+- YouTube projects show synthetic waveform data.
+- Visual styling is consistent across both project types.
+- Timeline interactions feel identical across both project types.
+- Existing saved projects still load.
+- Existing Practice Sections and Focus Loops preserve timing.
+- Mobile behavior remains usable.
+- Feature flag can disable unified timeline and return to the current implementation.

@@ -642,8 +642,8 @@ export const NeutralTimelinePrototype = memo(function NeutralTimelinePrototype(
             shiftDragShouldCreateFocusInsideActivePhrase(activePhrase, lo, hi) &&
             activePhrase
           ) {
-            let loCl = Math.max(lo, activePhrase.start);
-            let hiCl = Math.min(hi, activePhrase.end);
+            const loCl = Math.max(lo, activePhrase.start);
+            const hiCl = Math.min(hi, activePhrase.end);
             if (!(hiCl > loCl)) {
               ghostFocusRef.current = null;
               ghostPhraseRef.current = null;
